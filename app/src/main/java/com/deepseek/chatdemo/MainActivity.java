@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -13,6 +14,9 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -20,6 +24,8 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
@@ -41,6 +47,8 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
+    private TextView diagView;
+    private final StringBuilder diagLog = new StringBuilder();
 
     // 导出用：把网页 blob 分片写到临时文件，最后落到 Downloads
     private OutputStream currentOut;
@@ -164,7 +172,23 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
-        setContentView(webView);
+
+        // 原生诊断浮层：盖在 WebView 上方，显示 JS console 报错（不依赖网页注入）
+        diagView = new TextView(this);
+        diagView.setTextColor(Color.GREEN);
+        diagView.setBackgroundColor(Color.argb(220, 0, 0, 0));
+        diagView.setTextSize(11f);
+        diagView.setPadding(10, 10, 10, 10);
+        diagView.setGravity(Gravity.TOP | Gravity.START);
+        FrameLayout container = new FrameLayout(this);
+        container.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        container.addView(diagView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START));
+        setContentView(container);
+        appendDiag("[SYS] diagnostic overlay ready");
+        appendDiag("[SYS] SDK=" + Build.VERSION.SDK_INT + " " + Build.MANUFACTURER + " " + Build.MODEL);
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -242,6 +266,13 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
+            // 把网页 console 输出显示到浮层，白屏时可直接截图看报错
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage cm) {
+                appendDiag("[" + cm.messageLevel() + " L" + cm.lineNumber() + "] " + cm.message());
+                return true;
+            }
+
             @Override
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
@@ -306,6 +337,15 @@ public class MainActivity extends Activity {
 
     private void toastOnUi(final String msg) {
         runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show());
+    }
+
+    private void appendDiag(String line) {
+        try {
+            diagLog.append(line).append('\n');
+            if (diagLog.length() > 4000) diagLog.delete(0, diagLog.length() - 4000);
+            final String text = diagLog.toString();
+            runOnUiThread(() -> diagView.setText(text));
+        } catch (Exception ignored) {}
     }
 
     public class DownloadBridge {
