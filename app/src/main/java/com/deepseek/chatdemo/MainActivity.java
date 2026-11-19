@@ -47,33 +47,69 @@ public class MainActivity extends Activity {
     private String currentName;
     private File currentTemp;
 
-    // 兼容性补丁：部分旧/system WebView 没有 ResizeObserver，而 chat-demo 主界面
-    // 在 useLayoutEffect 里直接 new ResizeObserver(...)，无 fallback，会抛异常导致
-    // React 整棵树卸载 → 白屏。这里在页面 JS 执行前注入一个够用的 polyfill。
-    private static final String COMPAT_SHIM =
-            "<script>(function(){"
-            + "if(window.ResizeObserver)return;"
-            + "window.ResizeObserver=function(cb){"
-            + "this._t=[];this._cb=cb;"
-            + "var self=this,thisTick=0;"
-            + "function poll(){"
-            + "if(!self._t.length){self._id=0;return;}"
-            + "var es=[];"
-            + "for(var i=0;i<self._t.length;i++){var o=self._t[i],el=o.el;"
-            + "if(!el.isConnected){self._t.splice(i--,1);continue;}"
-            + "var r=el.getBoundingClientRect();"
-            + "if(r.width!==o.w||r.height!==o.h){o.w=r.width;o.h=r.height;"
-            + "es.push({target:el,contentRect:{width:r.width,height:r.height,top:r.top,left:r.left,right:r.right,bottom:r.bottom}});}"
-            + "}"
-            + "if(es.length){try{self._cb(es,self);}catch(e){}}"
-            + "self._id=setTimeout(poll,60);"
-            + "}"
-            + "this.observe=function(el){if(!el)return;var r=el.getBoundingClientRect();"
-            + "this._t.push({el:el,w:r.width,h:r.height});if(!this._id)this._id=setTimeout(poll,60);};"
-            + "this.unobserve=function(el){this._t=this._t.filter(function(o){return o.el!==el;});};"
-            + "this.disconnect=function(){this._t=[];if(this._id){clearTimeout(this._id);this._id=0;}};"
-            + "};"
-            + "})();</script>";
+    // 诊断 + 兼容补丁：在页面 JS 之前注入。
+    // (1) 屏幕浮层显示 JS 报错和 WebView 环境，白屏时可直接截图定位；
+    // (2) 给缺少 ResizeObserver 的旧 WebView 兜底，chat-demo 主界面直接 new 它，无 fallback。
+    private static final String DIAG_SHIM = """
+            <script>
+            (function(){
+              window.__DS_LOG=[];
+              var box=null;
+              function panel(){
+                if(box)return box;
+                box=document.createElement('div');
+                box.id='__ds_diag';
+                box.style.cssText='position:fixed;left:0;top:0;z-index:2147483647;background:#000;color:#0f0;font:11px/1.35 monospace;padding:6px 8px;max-width:100vw;max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-all;opacity:.94;border:1px solid #0f0;';
+                (document.body||document.documentElement).appendChild(box);
+                return box;
+              }
+              function log(tag,msg){
+                try{
+                  var line='['+tag+'] '+msg;
+                  window.__DS_LOG.push(line);
+                  panel().textContent+=line+'\\n';
+                }catch(e){}
+              }
+              log('INFO','DIAG_SHIM_LOADED');
+              log('INFO','RO='+(typeof window.ResizeObserver)+' | '+navigator.userAgent);
+              window.addEventListener('error',function(e){
+                log('ERR',(e.message||'')+' @ '+(e.filename||'')+':'+(e.lineno||0)+':'+(e.colno||0)+(e.error&&e.error.stack?'\\n'+e.error.stack:''));
+              },true);
+              window.addEventListener('unhandledrejection',function(e){
+                var r=e.reason;
+                log('REJ',(r&&(r.stack||r.message))||String(r));
+              });
+              var oe=console.error;
+              console.error=function(){
+                try{log('CON',Array.prototype.map.call(arguments,function(a){return a&&a.stack?a.stack:String(a);}).join(' '));}catch(e){}
+                return oe.apply(console,arguments);
+              };
+              if(!window.ResizeObserver){
+                window.ResizeObserver=function(cb){
+                  this._t=[];this._cb=cb;var self=this;
+                  function poll(){
+                    if(!self._t.length){self._id=0;return;}
+                    var es=[];
+                    for(var i=0;i<self._t.length;i++){
+                      var o=self._t[i],el=o.el;
+                      if(!el.isConnected){self._t.splice(i--,1);continue;}
+                      var r=el.getBoundingClientRect();
+                      if(r.width!==o.w||r.height!==o.h){o.w=r.width;o.h=r.height;
+                        es.push({target:el,contentRect:{width:r.width,height:r.height,top:r.top,left:r.left,right:r.right,bottom:r.bottom}});}
+                    }
+                    if(es.length){try{self._cb(es,self);}catch(e){}}
+                    self._id=setTimeout(poll,60);
+                  }
+                  this.observe=function(el){if(!el)return;var r=el.getBoundingClientRect();
+                    this._t.push({el:el,w:r.width,h:r.height});if(!this._id)this._id=setTimeout(poll,60);};
+                  this.unobserve=function(el){this._t=this._t.filter(function(o){return o.el!==el;});};
+                  this.disconnect=function(){this._t=[];if(this._id){clearTimeout(this._id);this._id=0;}};
+                };
+                log('INFO','ResizeObserver polyfill installed');
+              }
+            })();
+            </script>
+            """;
 
     // 注入到网页：拦截 <a download href="blob:...">.click()，
     // 改为把 blob 按 256KB 分片经 JS 桥传回 App。网页代码本身不用改。
@@ -155,28 +191,40 @@ public class MainActivity extends Activity {
                 try {
                     Uri uri = request.getUrl();
                     String path = uri.getPath();
-                    if (request.getMethod().equals("GET")
+                    if ("GET".equals(request.getMethod())
                             && "https".equalsIgnoreCase(uri.getScheme())
-                            && "cdn.deepseek.com".equalsIgnoreCase(uri.getHost())
-                            && ("/chat-demo".equals(path) || "/chat-demo/".equals(path))) {
+                            && uri.getHost() != null
+                            && uri.getHost().endsWith("deepseek.com")
+                            && path != null
+                            && path.startsWith("/chat-demo")) {
                         HttpURLConnection conn = (HttpURLConnection) new URL(uri.toString()).openConnection();
                         conn.setRequestMethod("GET");
                         conn.setConnectTimeout(15000);
                         conn.setReadTimeout(15000);
+                        // 关键：禁用 gzip，否则拿到的是压缩字节，UTF-8 解码成乱码 → 页面直接白屏
+                        conn.setRequestProperty("Accept-Encoding", "identity");
+                        conn.setRequestProperty("User-Agent",
+                                webView.getSettings().getUserAgentString());
                         int code = conn.getResponseCode();
-                        InputStream in = code >= 200 && code < 300
-                                ? conn.getInputStream() : conn.getErrorStream();
-                        String html = new String(readAll(in), StandardCharsets.UTF_8);
-                        if (code >= 200 && code < 300) {
-                            // 塞到 <head> 之后，确保早于任何外部脚本
-                            int idx = html.indexOf("<head>");
-                            if (idx < 0) idx = html.indexOf("<HEAD>");
-                            if (idx >= 0) {
-                                int insert = idx + 6;
-                                html = html.substring(0, insert) + COMPAT_SHIM + html.substring(insert);
-                            } else {
-                                html = COMPAT_SHIM + html;
-                            }
+                        if (code < 200 || code >= 300) {
+                            if (conn.getErrorStream() != null) conn.getErrorStream().close();
+                            return super.shouldInterceptRequest(view, request);
+                        }
+                        String html = new String(readAll(conn.getInputStream()), StandardCharsets.UTF_8);
+                        conn.disconnect();
+                        //  sanity check：不是 HTML 就绝不返回，避免把页面搞得更糟
+                        if (html.indexOf("<html") < 0 && html.indexOf("<HTML") < 0) {
+                            Log.w(TAG, "intercepted body not html, fallback");
+                            return super.shouldInterceptRequest(view, request);
+                        }
+                        // 塞到 <head> 之后，确保早于任何外部脚本
+                        int idx = html.indexOf("<head>");
+                        if (idx < 0) idx = html.indexOf("<HEAD>");
+                        if (idx >= 0) {
+                            int insert = idx + 6;
+                            html = html.substring(0, insert) + DIAG_SHIM + html.substring(insert);
+                        } else {
+                            html = DIAG_SHIM + html;
                         }
                         return new WebResourceResponse("text/html", "UTF-8",
                                 new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
