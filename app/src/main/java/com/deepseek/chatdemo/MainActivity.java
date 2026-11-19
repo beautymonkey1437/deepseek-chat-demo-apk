@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
                   var line='['+tag+'] '+msg;
                   window.__DS_LOG.push(line);
                   panel().textContent+=line+'\\n';
+                  if(window.DSReport)window.DSReport.report(line);
                 }catch(e){}
               }
               log('INFO','DIAG_SHIM_LOADED');
@@ -205,8 +206,14 @@ public class MainActivity extends Activity {
         }
 
         webView.addJavascriptInterface(new DownloadBridge(), "DSDownload");
+        webView.addJavascriptInterface(new ReportBridge(), "DSReport");
 
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                appendDiag("[NAV] start " + url);
+            }
+
             // 只拦截主文档 HTML，把兼容补丁插到 <head> 里、页面 JS 之前执行。
             // 用 onPageFinished 注入太晚：React 首屏渲染时就已经崩了。
             @Override
@@ -250,6 +257,7 @@ public class MainActivity extends Activity {
                         } else {
                             html = DIAG_SHIM + html;
                         }
+                        appendDiag("[SHIM] HTML intercepted + shim injected (" + html.length() + " chars)");
                         return new WebResourceResponse("text/html", "UTF-8",
                                 new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
                     }
@@ -261,7 +269,28 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                // 主动探测页面真实状态，绕开 console 转发不可靠的问题
+                view.evaluateJavascript(
+                        "(function(){"
+                                + "var out={};"
+                                + "try{out.ro=typeof ResizeObserver;}catch(e){out.ro='ERR:'+e.message;}"
+                                + "try{out.bodyLen=document.body?document.body.innerHTML.length:-1;}catch(e){out.bodyLen='ERR';}"
+                                + "try{var r=document.getElementById('root');out.rootLen=r?r.innerHTML.length:-1;}catch(e){out.rootLen='ERR';}"
+                                + "try{out.ready=document.readyState;}catch(e){out.ready='ERR';}"
+                                + "try{out.log=window.__DS_LOG?window.__DS_LOG.slice(0,8):'none';}catch(e){out.log='ERR';}"
+                                + "try{out.title=document.title;}catch(e){out.title='ERR';}"
+                                + "window.DSReport.report('PROBE '+JSON.stringify(out));"
+                                + "})();", null);
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest req,
+                                        android.webkit.WebResourceError err) {
+                super.onReceivedError(view, req, err);
+                if (req != null && err != null) {
+                    appendDiag("[NETERR] " + req.getUrl() + " -> " + err.getDescription());
+                }
             }
         });
 
@@ -346,6 +375,13 @@ public class MainActivity extends Activity {
             final String text = diagLog.toString();
             runOnUiThread(() -> diagView.setText(text));
         } catch (Exception ignored) {}
+    }
+
+    public class ReportBridge {
+        @JavascriptInterface
+        public void report(String msg) {
+            appendDiag("[JS] " + msg);
+        }
     }
 
     public class DownloadBridge {
