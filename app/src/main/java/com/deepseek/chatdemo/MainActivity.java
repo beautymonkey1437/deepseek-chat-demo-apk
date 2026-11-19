@@ -21,11 +21,15 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
 
@@ -41,6 +45,34 @@ public class MainActivity extends Activity {
     private OutputStream currentOut;
     private String currentName;
     private File currentTemp;
+
+    // 兼容性补丁：部分旧/system WebView 没有 ResizeObserver，而 chat-demo 主界面
+    // 在 useLayoutEffect 里直接 new ResizeObserver(...)，无 fallback，会抛异常导致
+    // React 整棵树卸载 → 白屏。这里在页面 JS 执行前注入一个够用的 polyfill。
+    private static final String COMPAT_SHIM =
+            "<script>(function(){"
+            + "if(window.ResizeObserver)return;"
+            + "window.ResizeObserver=function(cb){"
+            + "this._t=[];this._cb=cb;"
+            + "var self=this,thisTick=0;"
+            + "function poll(){"
+            + "if(!self._t.length){self._id=0;return;}"
+            + "var es=[];"
+            + "for(var i=0;i<self._t.length;i++){var o=self._t[i],el=o.el;"
+            + "if(!el.isConnected){self._t.splice(i--,1);continue;}"
+            + "var r=el.getBoundingClientRect();"
+            + "if(r.width!==o.w||r.height!==o.h){o.w=r.width;o.h=r.height;"
+            + "es.push({target:el,contentRect:{width:r.width,height:r.height,top:r.top,left:r.left,right:r.right,bottom:r.bottom}});}"
+            + "}"
+            + "if(es.length){try{self._cb(es,self);}catch(e){}}"
+            + "self._id=setTimeout(poll,60);"
+            + "}"
+            + "this.observe=function(el){if(!el)return;var r=el.getBoundingClientRect();"
+            + "this._t.push({el:el,w:r.width,h:r.height});if(!this._id)this._id=setTimeout(poll,60);};"
+            + "this.unobserve=function(el){this._t=this._t.filter(function(o){return o.el!==el;});};"
+            + "this.disconnect=function(){this._t=[];if(this._id){clearTimeout(this._id);this._id=0;}};"
+            + "};"
+            + "})();</script>";
 
     // 注入到网页：拦截 <a download href="blob:...">.click()，
     // 改为把 blob 按 256KB 分片经 JS 桥传回 App。网页代码本身不用改。
@@ -114,6 +146,46 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new DownloadBridge(), "DSDownload");
 
         webView.setWebViewClient(new WebViewClient() {
+            // 只拦截主文档 HTML，把兼容补丁插到 <head> 里、页面 JS 之前执行。
+            // 用 onPageFinished 注入太晚：React 首屏渲染时就已经崩了。
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view,
+                                                              android.webkit.WebResourceRequest request) {
+                try {
+                    Uri uri = request.getUrl();
+                    String path = uri.getPath();
+                    if (request.getMethod().equals("GET")
+                            && "https".equalsIgnoreCase(uri.getScheme())
+                            && "cdn.deepseek.com".equalsIgnoreCase(uri.getHost())
+                            && ("/chat-demo".equals(path) || "/chat-demo/".equals(path))) {
+                        HttpURLConnection conn = (HttpURLConnection) new URL(uri.toString()).openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(15000);
+                        int code = conn.getResponseCode();
+                        InputStream in = code >= 200 && code < 300
+                                ? conn.getInputStream() : conn.getErrorStream();
+                        String html = new String(readAll(in), StandardCharsets.UTF_8);
+                        if (code >= 200 && code < 300) {
+                            // 塞到 <head> 之后，确保早于任何外部脚本
+                            int idx = html.indexOf("<head>");
+                            if (idx < 0) idx = html.indexOf("<HEAD>");
+                            if (idx >= 0) {
+                                int insert = idx + 6;
+                                html = html.substring(0, insert) + COMPAT_SHIM + html.substring(insert);
+                            } else {
+                                html = COMPAT_SHIM + html;
+                            }
+                        }
+                        return new WebResourceResponse("text/html", "UTF-8",
+                                new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "intercept failed, falling back to normal load", e);
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
@@ -252,5 +324,15 @@ public class MainActivity extends Activity {
         byte[] buf = new byte[64 * 1024];
         int n;
         while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+    }
+
+    private static byte[] readAll(InputStream in) throws Exception {
+        if (in == null) return new byte[0];
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        return bos.toByteArray();
     }
 }
