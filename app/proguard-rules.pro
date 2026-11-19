@@ -1,0 +1,2 @@
+-keep class com.deepseek.chatdemo.** { *; }
+-keepattributes *JavascriptInterface*
