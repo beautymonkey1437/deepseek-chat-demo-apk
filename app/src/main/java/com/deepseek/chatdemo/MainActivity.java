@@ -15,6 +15,7 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
@@ -173,6 +174,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
+        // 尝试修复：关闭硬件加速（华为 WebView 上 GPU 合成某些页面会整片白屏）
+        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
 
         // 原生诊断浮层：盖在 WebView 上方，显示 JS console 报错（不依赖网页注入）
         diagView = new TextView(this);
@@ -275,11 +278,22 @@ public class MainActivity extends Activity {
                                 + "var out={};"
                                 + "try{out.ro=typeof ResizeObserver;}catch(e){out.ro='ERR:'+e.message;}"
                                 + "try{out.bodyLen=document.body?document.body.innerHTML.length:-1;}catch(e){out.bodyLen='ERR';}"
-                                + "try{var r=document.getElementById('root');out.rootLen=r?r.innerHTML.length:-1;}catch(e){out.rootLen='ERR';}"
+                                + "try{var r=document.getElementById('root');out.rootLen=r?r.innerHTML.length:-1;"
+                                + "out.rootText=r?(r.innerText||r.textContent||'').slice(0,120):'-';}catch(e){out.rootLen='ERR';}"
                                 + "try{out.ready=document.readyState;}catch(e){out.ready='ERR';}"
-                                + "try{out.log=window.__DS_LOG?window.__DS_LOG.slice(0,8):'none';}catch(e){out.log='ERR';}"
                                 + "try{out.title=document.title;}catch(e){out.title='ERR';}"
-                                + "window.DSReport.report('PROBE '+JSON.stringify(out));"
+                                + "try{var b=document.body;var bs=getComputedStyle(b);"
+                                + "out.bColor=bs.color;out.bBg=bs.backgroundColor;out.bOpacity=bs.opacity;"
+                                + "out.bDisplay=bs.display;out.bVis=bs.visibility;}catch(e){out.bStyle='ERR:'+e.message;}"
+                                + "try{var r2=document.getElementById('root');var rs=getComputedStyle(r2);"
+                                + "out.rColor=rs.color;out.rBg=rs.backgroundColor;out.rOpacity=rs.opacity;"
+                                + "out.rDisplay=rs.display;out.rVis=rs.visibility;"
+                                + "out.rHeight=r2.getBoundingClientRect().height;}catch(e){out.rStyle='ERR:'+e.message;}"
+                                + "try{var f=r2.firstElementChild;if(f){var fs=getComputedStyle(f);"
+                                + "out.fTag=f.tagName;out.fHeight=f.getBoundingClientRect().height;"
+                                + "out.fOpacity=fs.opacity;out.fColor=fs.color;out.fBg=fs.backgroundColor;"
+                                + "out.fText=(f.innerText||f.textContent||'').slice(0,80);}}catch(e){out.first='ERR:'+e.message;}"
+                                + "window.DSReport.report('PROBE2 '+JSON.stringify(out));"
                                 + "})();", null);
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
             }
