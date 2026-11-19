@@ -60,6 +60,15 @@ public class MainActivity extends Activity {
     // (1) 屏幕浮层显示 JS 报错和 WebView 环境，白屏时可直接截图定位；
     // (2) 给缺少 ResizeObserver 的旧 WebView 兜底，chat-demo 主界面直接 new 它，无 fallback。
     private static final String DIAG_SHIM = """
+            <style>
+            /* 旧华为 WebView 不支持 dvh 视口单位，主框架高度会塌成 0（白屏根因）。
+               用 vh 覆盖，并强制根容器有高度。 */
+            :root{--app-viewport-height:100vh!important;--app-viewport-top:0px!important;}
+            html,body{height:100%!important;margin:0!important;}
+            #root{height:100vh!important;min-height:100vh!important;}
+            #root>div{height:100vh!important;min-height:100vh!important;}
+            [class*="frame-"]{height:100vh!important;}
+            </style>
             <script>
             (function(){
               window.__DS_LOG=[];
@@ -272,6 +281,24 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                // CSS 修复（走 evaluateJavascript，不依赖失效的 HTML 拦截）：
+                // 旧华为 WebView 不支持 dvh，主框架 height:var(--...,100dvh) 会塌成 0 → 白屏。
+                // 直接插 <style> 用 vh 覆盖，并给所有 frame-* 容器强制高度。
+                view.evaluateJavascript(
+                        "(function(){"
+                                + "try{"
+                                + "var s=document.createElement('style');s.id='__ds_cssfix';"
+                                + "s.textContent=':root{--app-viewport-height:100vh!important;--app-viewport-top:0px!important}"
+                                + "html,body{height:100%!important;margin:0!important}"
+                                + "#root{height:100vh!important;min-height:100vh!important}"
+                                + "#root>div{height:100vh!important;min-height:100vh!important}"
+                                + "[class*=frame-]{height:100vh!important}';"
+                                + "document.head.appendChild(s);"
+                                + "var fs=document.querySelectorAll('[class*=frame-]');"
+                                + "for(var i=0;i<fs.length;i++){fs[i].style.setProperty('height','100vh','important');}"
+                                + "window.DSReport.report('CSS_FIX applied, frames='+fs.length);"
+                                + "}catch(e){window.DSReport.report('CSS_FIX ERR '+e.message);}"
+                                + "})();", null);
                 // 主动探测页面真实状态，绕开 console 转发不可靠的问题
                 view.evaluateJavascript(
                         "(function(){"
@@ -295,6 +322,15 @@ public class MainActivity extends Activity {
                                 + "out.fText=(f.innerText||f.textContent||'').slice(0,80);}}catch(e){out.first='ERR:'+e.message;}"
                                 + "window.DSReport.report('PROBE2 '+JSON.stringify(out));"
                                 + "})();", null);
+                // 延迟复查：CSS 生效后主容器高度是否恢复（>0 就说明修好了）
+                webView.postDelayed(() -> view.evaluateJavascript(
+                        "(function(){var r=document.getElementById('root');var out={};"
+                                + "try{out.rh=r.getBoundingClientRect().height;}catch(e){out.rh='ERR';}"
+                                + "try{var f=r.firstElementChild;out.fh=f?f.getBoundingClientRect().height:-1;"
+                                + "out.fcls=f?(''+f.className).slice(0,40):'';}catch(e){out.fh='ERR';}"
+                                + "var fs=document.querySelectorAll('[class*=frame-]');out.frames=[];"
+                                + "for(var i=0;i<fs.length&&i<3;i++){out.frames.push(fs[i].getBoundingClientRect().height);}"
+                                + "window.DSReport.report('AFTER_FIX '+JSON.stringify(out));})();", null), 1200);
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
             }
 
