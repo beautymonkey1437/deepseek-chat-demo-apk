@@ -149,7 +149,7 @@ public class MainActivity extends Activity {
                       rebuilt.add(nf);
                       Object.defineProperty(el,'files',{value:[nf],configurable:true});
                       var head=Array.from(bytes.slice(0,4));
-                      // 用网页相同逻辑自检：EOCD 查找 PK\x05\x06 签名
+                      // 用网页相同逻辑自检：EOCD 查找 PK 05 06 签名
                       var eo=null;
                       try{
                         var tailStart=Math.max(0,bytes.length-22-65535);
