@@ -72,40 +72,43 @@ public class MainActivity extends Activity {
             })();
             """;
 
-    // 监控网页侧拿到的文件信息与读取过程
+    // 文件注入 + 诊断：把 file:// 来源的.zip 换成内存 File，绕开华为 WebView
+    // 对 file:// Blob 的 slice()/stream()/text() 兼容性问题（导致 ZIP 校验失败）。
     private static final String FILE_MONITOR = """
             (function(){
               if(window.__dsFileMon)return;
               window.__dsFileMon=true;
               function rep(s){if(window.DSReport)window.DSReport.report(s);}
+              var rebuilt=new WeakSet();
               document.addEventListener('change',function(e){
                 try{
                   var el=e.target;
-                  if(el&&el.tagName==='INPUT'&&el.type==='file'){
-                    var f=el.files&&el.files[0];
-                    if(f){rep('INPUT_FILE name='+f.name+' size='+f.size+' type='+f.type);}
-                    else{rep('INPUT_FILE none');}
-                  }
+                  if(!el||el.tagName!=='INPUT'||el.type!=='file')return;
+                  var f=el.files&&el.files[0];
+                  if(!f){rep('INPUT_FILE none');return;}
+                  rep('INPUT_FILE name='+f.name+' size='+f.size+' type='+f.type);
+                  // 只处理 zip 导入，且避免重复重建
+                  var isZip=/\\.zip$/i.test(f.name)||f.type==='application/zip';
+                  if(!isZip||rebuilt.has(f))return;
+                  rebuilt.add(f);
+                  e.stopPropagation();
+                  e.preventDefault();
+                  rep('REBUILD start');
+                  var fr=new FileReader();
+                  fr.onload=function(){
+                    try{
+                      var bytes=new Uint8Array(fr.result);
+                      var nf=new File([bytes],f.name,{type:f.type||'application/zip'});
+                      rebuilt.add(nf);
+                      Object.defineProperty(el,'files',{value:[nf],configurable:true});
+                      rep('REBUILD done inMemory size='+nf.size+' slice4='+nf.slice(0,4).size);
+                      el.dispatchEvent(new Event('change',{bubbles:true}));
+                    }catch(err){rep('REBUILD ERR '+err.message);}
+                  };
+                  fr.onerror=function(){rep('REBUILD read ERR');};
+                  fr.readAsArrayBuffer(f);
                 }catch(err){rep('INPUT_ERR '+err.message);}
               },true);
-              function big(sz){return sz>1024;}
-              var OAB=FileReader.prototype.readAsArrayBuffer;
-              FileReader.prototype.readAsArrayBuffer=function(b){
-                try{if(b&&big(b.size))rep('FILEREADER_AB size='+b.size);}catch(e){}
-                return OAB.apply(this,arguments);
-              };
-              var OAT=FileReader.prototype.readAsText;
-              FileReader.prototype.readAsText=function(b){
-                try{if(b&&big(b.size))rep('FILEREADER_TXT size='+b.size);}catch(e){}
-                return OAT.apply(this,arguments);
-              };
-              if(Blob.prototype.arrayBuffer){
-                var OB=Blob.prototype.arrayBuffer;
-                Blob.prototype.arrayBuffer=function(){
-                  try{if(big(this.size))rep('BLOB_AB size='+this.size);}catch(e){}
-                  return OB.apply(this,arguments);
-                };
-              }
               rep('FILE_MONITOR installed');
             })();
             """;
@@ -297,10 +300,9 @@ public class MainActivity extends Activity {
     private File copyToCache(Uri uri) {
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in == null) { appendDiag("[COPY] openInputStream null"); return null; }
-            String name = displayName(uri);
-            if (name == null || name.isEmpty()) name = "import.zip";
-            name = name.replace("/", "_").replace("\\", "_");
-            File dst = new File(getCacheDir(), name);
+            // 文件名固定成纯 ASCII，避开中文在 file:// URI 里被 URL 编码
+            // （华为 WebView 转给网页时编码串会导致读取失败）
+            File dst = new File(getCacheDir(), "import.zip");
             try (OutputStream out = new FileOutputStream(dst)) {
                 byte[] buf = new byte[128 * 1024];
                 int n;
