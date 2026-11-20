@@ -16,6 +16,7 @@ import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -130,10 +131,29 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
+                toastOnUi("本地版v2 已加载");
             }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
+            // 授予网页的 getUserMedia 权限（麦克风），否则语音输入报"没权限"
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                final String[] wanted = request.getResources();
+                boolean needsMic = false;
+                for (String r : wanted) {
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) needsMic = true;
+                }
+                if (needsMic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                        && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    request.deny();
+                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1003);
+                    return;
+                }
+                request.grant(wanted);
+            }
+
             @Override
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
@@ -226,6 +246,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void uploadFile(String id, String apiKey, String base64,
                                String fileName, String mime, String purpose) {
+            toastOnUi("[桥]拦截上传 " + fileName + " " + (base64==null?0:base64.length()) + "字符");
             new Thread(() -> doUpload(id, apiKey, base64, fileName, mime, purpose), "ds-upload").start();
         }
     }
@@ -275,10 +296,14 @@ public class MainActivity extends Activity {
             ok = (code >= 200 && code < 300);
             resultJson = resp == null || resp.isEmpty() ? "{}" : resp;
             Log.d(TAG, "upload code=" + code + " resp=" + resultJson.substring(0, Math.min(200, resultJson.length())));
+            final boolean uOk = ok;
+            final String uResp = resultJson;
+            runOnUiThread(() -> toastOnUi("[桥]上传返回 " + (uOk?"成功":"失败") + " " + uResp.substring(0, Math.min(80,uResp.length()))));
         } catch (Exception e) {
             Log.e(TAG, "upload failed", e);
             ok = false;
             resultJson = "{\"error\":{\"message\":\"" + escapeJson(e.getMessage() == null ? "upload failed" : e.getMessage()) + "\"}}";
+            runOnUiThread(() -> toastOnUi("[桥]上传异常 " + String.valueOf(e.getMessage()).substring(0, Math.min(80, String.valueOf(e.getMessage()).length()))));
         }
         final boolean fOk = ok;
         final String fJson = resultJson;
