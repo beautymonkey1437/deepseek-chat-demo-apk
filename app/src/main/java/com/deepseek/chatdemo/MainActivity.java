@@ -7,6 +7,7 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -15,12 +16,16 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
+import android.view.Gravity;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
@@ -29,6 +34,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class MainActivity extends Activity {
@@ -40,16 +46,14 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
+    private TextView diagView;
+    private final StringBuilder diagLog = new StringBuilder();
 
-    // 导出用：把网页 blob 分片写到临时文件，最后落到 Downloads
     private OutputStream currentOut;
     private String currentName;
     private File currentTemp;
 
-    // 修复白屏：chat-demo 的 CSS 用了 dvh 视口单位（Chrome 108+ 才支持），
-    // 旧华为 WebView 不认 → .frame{height:var(--app-viewport-height,100dvh)} 失效
-    // → 主容器高度塌成 0 → 页面有内容但全白。这里用 vh 覆盖并强制容器高度。
-    // 走 evaluateJavascript（onPageFinished），因为华为 WebView 上 HTML 拦截不可靠。
+    // 修复白屏：旧 WebView 不支持 dvh，用 vh 覆盖
     private static final String CSS_FIX = """
             (function(){
               try{
@@ -68,8 +72,43 @@ public class MainActivity extends Activity {
             })();
             """;
 
-    // 导出用：拦截 <a download href="blob:...">.click()，把 blob 按 256KB 分片
-    // 经 JS 桥传回 App 写入 Downloads，避免大 ZIP 一次性传输失败。
+    // 监控网页侧拿到的文件信息与读取过程
+    private static final String FILE_MONITOR = """
+            (function(){
+              if(window.__dsFileMon)return;
+              window.__dsFileMon=true;
+              function rep(s){if(window.DSReport)window.DSReport.report(s);}
+              document.addEventListener('change',function(e){
+                try{
+                  var el=e.target;
+                  if(el&&el.tagName==='INPUT'&&el.type==='file'){
+                    var f=el.files&&el.files[0];
+                    if(f){rep('INPUT_FILE name='+f.name+' size='+f.size+' type='+f.type);}
+                    else{rep('INPUT_FILE none');}
+                  }
+                }catch(err){rep('INPUT_ERR '+err.message);}
+              },true);
+              var OAB=FileReader.prototype.readAsArrayBuffer;
+              FileReader.prototype.readAsArrayBuffer=function(b){
+                try{rep('FILEREADER_AB size='+(b&&b.size));}catch(e){}
+                return OAB.apply(this,arguments);
+              };
+              var OAT=FileReader.prototype.readAsText;
+              FileReader.prototype.readAsText=function(b){
+                try{rep('FILEREADER_TXT size='+(b&&b.size));}catch(e){}
+                return OAT.apply(this,arguments);
+              };
+              if(Blob.prototype.arrayBuffer){
+                var OB=Blob.prototype.arrayBuffer;
+                Blob.prototype.arrayBuffer=function(){
+                  try{rep('BLOB_AB size='+this.size);}catch(e){}
+                  return OB.apply(this,arguments);
+                };
+              }
+              rep('FILE_MONITOR installed');
+            })();
+            """;
+
     private static final String DOWNLOAD_HOOK = """
             (function(){
               if (window.__dsDownloadHooked) return;
@@ -121,14 +160,28 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
-        setContentView(webView);
+
+        // 诊断浮层
+        diagView = new TextView(this);
+        diagView.setTextColor(Color.GREEN);
+        diagView.setBackgroundColor(Color.argb(220, 0, 0, 0));
+        diagView.setTextSize(10f);
+        diagView.setPadding(8, 8, 8, 8);
+        diagView.setGravity(Gravity.TOP | Gravity.START);
+        FrameLayout container = new FrameLayout(this);
+        container.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        container.addView(diagView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START));
+        setContentView(container);
+        appendDiag("[SYS] ready SDK=" + Build.VERSION.SDK_INT + " " + Build.MANUFACTURER + " " + Build.MODEL);
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
-        // localStorage（设置/API Key）+ IndexedDB（会话/图片）都要开，否则数据存不住
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setAllowFileAccess(false);
+        s.setAllowFileAccess(true);   // 诊断：看 file:// 是否可被网页读到
         s.setAllowContentAccess(true);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
@@ -136,23 +189,37 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
+        if (Build.VERSION.SDK_INT >= 16) {
+            try { s.setAllowFileAccessFromFileURLs(true); } catch (Exception ignored) {}
+            try { s.setAllowUniversalAccessFromFileURLs(true); } catch (Exception ignored) {}
+        }
 
         webView.addJavascriptInterface(new DownloadBridge(), "DSDownload");
+        webView.addJavascriptInterface(new ReportBridge(), "DSReport");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                // 页面加载完成后注入 dvh 修复 + 导出拦截
                 view.evaluateJavascript(CSS_FIX, null);
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
+                view.evaluateJavascript(FILE_MONITOR, null);
+                appendDiag("[NAV] finished " + url);
             }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                appendDiag("[CON " + cm.messageLevel() + "] " + cm.message());
+                return true;
+            }
+
+            @Override
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
+                appendDiag("[PICK] onShowFileChooser accept=" + Arrays.toString(params.getAcceptTypes())
+                        + " multiple=" + params.isMultiple());
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
                 Intent intent;
@@ -162,6 +229,7 @@ public class MainActivity extends Activity {
                     startActivityForResult(Intent.createChooser(intent, "选择文件"), REQ_FILE_CHOOSER);
                 } catch (ActivityNotFoundException e) {
                     filePathCallback = null;
+                    appendDiag("[PICK] no activity: " + e.getMessage());
                     return false;
                 }
                 return true;
@@ -184,11 +252,11 @@ public class MainActivity extends Activity {
             if (filePathCallback == null) return;
             final ValueCallback<Uri[]> cb = filePathCallback;
             filePathCallback = null;
+            appendDiag("[PICK] result code=" + resultCode + " data=" + (data != null));
             if (resultCode != RESULT_OK || data == null) {
                 cb.onReceiveValue(null);
                 return;
             }
-            // 收集用户选中的文件 URI
             List<Uri> picked = new ArrayList<>();
             if (data.getClipData() != null) {
                 int n = data.getClipData().getItemCount();
@@ -196,35 +264,36 @@ public class MainActivity extends Activity {
             } else if (data.getData() != null) {
                 picked.add(data.getData());
             }
+            appendDiag("[PICK] count=" + picked.size());
             if (picked.isEmpty()) {
                 cb.onReceiveValue(null);
                 return;
             }
-            // 关键：把 content:// 临时 URI 复制成 App 缓存里的真实文件，
-            // 再把 file:// 交给网页。华为 WebView 直接读 content:// 会拿到残缺内容，
-            // 导致网页的 ZIP 格式校验失败。
             final List<Uri> finalPicked = picked;
             new Thread(() -> {
                 List<Uri> out = new ArrayList<>();
                 boolean ok = true;
                 for (Uri u : finalPicked) {
+                    appendDiag("[COPY] uri=" + u.getScheme() + " " + u.toString().substring(0, Math.min(120, u.toString().length())));
                     File cached = copyToCache(u);
-                    if (cached != null) out.add(Uri.fromFile(cached));
-                    else { ok = false; break; }
+                    if (cached != null) {
+                        appendDiag("[COPY] -> " + cached.getAbsolutePath() + " size=" + cached.length());
+                        out.add(Uri.fromFile(cached));
+                    } else { ok = false; appendDiag("[COPY] FAILED"); break; }
                 }
                 final Uri[] result = ok ? out.toArray(new Uri[0]) : null;
                 runOnUiThread(() -> {
                     if (result == null) toastOnUi("读取文件失败，请重试");
+                    else appendDiag("[PICK] callback " + result.length + " uri(s): " + result[0]);
                     cb.onReceiveValue(result);
                 });
             }).start();
         }
     }
 
-    // 把 content:// URI 的内容复制到 App 缓存目录，保留原文件名
     private File copyToCache(Uri uri) {
         try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) return null;
+            if (in == null) { appendDiag("[COPY] openInputStream null"); return null; }
             String name = displayName(uri);
             if (name == null || name.isEmpty()) name = "import.zip";
             name = name.replace("/", "_").replace("\\", "_");
@@ -237,6 +306,7 @@ public class MainActivity extends Activity {
             return dst.length() > 0 ? dst : null;
         } catch (Exception e) {
             Log.e(TAG, "copyToCache failed", e);
+            appendDiag("[COPY] ERR " + e.getMessage());
             return null;
         }
     }
@@ -252,6 +322,13 @@ public class MainActivity extends Activity {
         return name;
     }
 
+    public class ReportBridge {
+        @JavascriptInterface
+        public void report(String msg) {
+            appendDiag("[JS] " + msg);
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (webView != null && webView.canGoBack()) webView.goBack();
@@ -264,6 +341,15 @@ public class MainActivity extends Activity {
             try { currentOut.close(); } catch (Exception ignored) {}
         }
         super.onDestroy();
+    }
+
+    private void appendDiag(String line) {
+        try {
+            diagLog.append(line).append('\n');
+            if (diagLog.length() > 5000) diagLog.delete(0, diagLog.length() - 5000);
+            final String text = diagLog.toString();
+            runOnUiThread(() -> diagView.setText(text));
+        } catch (Exception ignored) {}
     }
 
     private void toastOnUi(final String msg) {
