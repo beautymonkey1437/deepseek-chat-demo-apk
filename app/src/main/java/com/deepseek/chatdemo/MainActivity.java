@@ -53,10 +53,28 @@ public class MainActivity extends Activity {
     private static final String COMPAT_JS = """
             (function(){
               try{
+                // ES2022/2023 新方法，旧 WebView 缺失会让会话渲染/导入直接抛错
                 if(!Array.prototype.toSorted)
                   Array.prototype.toSorted=function(c){return this.slice().sort(c);};
+                if(!Array.prototype.toReversed)
+                  Array.prototype.toReversed=function(){return this.slice().reverse();};
+                if(!Array.prototype.toSpliced)
+                  Array.prototype.toSpliced=function(){var a=this.slice();return a.splice.apply(a,arguments),a;};
+                if(!Array.prototype.with)
+                  Array.prototype.with=function(i,v){var a=this.slice();a[i<0?a.length+i:i]=v;return a;};
                 if(!Array.prototype.at)
                   Array.prototype.at=function(i){i=i||0;return i<0?this[this.length+i]:this[i];};
+                if(!Array.prototype.findLast)
+                  Array.prototype.findLast=function(f){for(var i=this.length-1;i>=0;i--)if(f(this[i],i,this))return this[i];};
+                if(!Array.prototype.findLastIndex)
+                  Array.prototype.findLastIndex=function(f){for(var i=this.length-1;i>=0;i--)if(f(this[i],i,this))return i;return -1;};
+                if(!Object.hasOwn)
+                  Object.hasOwn=function(o,k){return Object.prototype.hasOwnProperty.call(o,k);};
+                if(!Object.groupBy)
+                  Object.groupBy=function(a,f){var o=Object.create(null);a.forEach(function(x){var k=f(x);(o[k]||(o[k]=[])).push(x);});return o;};
+                if(typeof CSS==='undefined')window.CSS={};
+                if(!CSS.escape)
+                  CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
               }catch(e){}
               try{
                 if(document.getElementById('__ds_cssfix'))return;
