@@ -88,20 +88,21 @@ public class MainActivity extends Activity {
                   }
                 }catch(err){rep('INPUT_ERR '+err.message);}
               },true);
+              function big(sz){return sz>1024;}
               var OAB=FileReader.prototype.readAsArrayBuffer;
               FileReader.prototype.readAsArrayBuffer=function(b){
-                try{rep('FILEREADER_AB size='+(b&&b.size));}catch(e){}
+                try{if(b&&big(b.size))rep('FILEREADER_AB size='+b.size);}catch(e){}
                 return OAB.apply(this,arguments);
               };
               var OAT=FileReader.prototype.readAsText;
               FileReader.prototype.readAsText=function(b){
-                try{rep('FILEREADER_TXT size='+(b&&b.size));}catch(e){}
+                try{if(b&&big(b.size))rep('FILEREADER_TXT size='+b.size);}catch(e){}
                 return OAT.apply(this,arguments);
               };
               if(Blob.prototype.arrayBuffer){
                 var OB=Blob.prototype.arrayBuffer;
                 Blob.prototype.arrayBuffer=function(){
-                  try{rep('BLOB_AB size='+this.size);}catch(e){}
+                  try{if(big(this.size))rep('BLOB_AB size='+this.size);}catch(e){}
                   return OB.apply(this,arguments);
                 };
               }
@@ -164,16 +165,23 @@ public class MainActivity extends Activity {
         // 诊断浮层
         diagView = new TextView(this);
         diagView.setTextColor(Color.GREEN);
-        diagView.setBackgroundColor(Color.argb(220, 0, 0, 0));
+        diagView.setBackgroundColor(Color.argb(225, 0, 0, 0));
         diagView.setTextSize(10f);
         diagView.setPadding(8, 8, 8, 8);
         diagView.setGravity(Gravity.TOP | Gravity.START);
+        // 固定高度 + 可滚动，日志不会盖满整屏；点一下清空，方便导入前复位
+        int diagH = (int) (getResources().getDisplayMetrics().heightPixels * 0.42);
+        diagView.setHeight(diagH);
+        diagView.setMovementMethod(android.text.method.ScrollingMovementMethod.getInstance());
+        diagView.setOnClickListener(v -> {
+            diagLog.setLength(0);
+            diagView.setText("");
+        });
         FrameLayout container = new FrameLayout(this);
         container.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         container.addView(diagView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.START));
+                ViewGroup.LayoutParams.MATCH_PARENT, diagH, Gravity.TOP | Gravity.START));
         setContentView(container);
         appendDiag("[SYS] ready SDK=" + Build.VERSION.SDK_INT + " " + Build.MANUFACTURER + " " + Build.MODEL);
 
@@ -343,7 +351,12 @@ public class MainActivity extends Activity {
             diagLog.append(line).append('\n');
             if (diagLog.length() > 5000) diagLog.delete(0, diagLog.length() - 5000);
             final String text = diagLog.toString();
-            runOnUiThread(() -> diagView.setText(text));
+            runOnUiThread(() -> {
+                diagView.setText(text);
+                // 自动滚到底部，显示最新日志
+                int h = diagView.getLayout().getLineTop(diagView.getLineCount());
+                diagView.scrollTo(0, Math.max(0, h - diagView.getHeight()));
+            });
         } catch (Exception ignored) {}
     }
 
