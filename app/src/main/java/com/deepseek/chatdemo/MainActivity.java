@@ -138,13 +138,38 @@ public class MainActivity extends Activity {
                       // zip 库读文件尾部目录区时会拿到错误字节。用 JS 数组切片覆盖
                       // 实例 slice()，任何偏移都绝对正确。
                       try{
+                        // 华为 WebView 对 file/content 来源 File 的 slice/arrayBuffer/stream/text
+                        // 都有兼容问题。全部用 JS 基于完整字节 bytes 重新实现，
+                        // zip 库调哪个方法都拿到正确数据。
+                        function mkBlob(part){
+                          var bb=new Blob([part]);
+                          try{
+                            bb.arrayBuffer=function(){return Promise.resolve(part.buffer.slice(part.byteOffset,part.byteOffset+part.byteLength));};
+                            bb.text=function(){try{return Promise.resolve(new TextDecoder('utf-8').decode(part));}catch(e){return Promise.resolve('');}};
+                          }catch(e){}
+                          return bb;
+                        }
                         nf.slice=function(s,e,ct){
                           var a=s||0, b=(e===undefined||e<0)?bytes.length:Math.min(e,bytes.length);
                           if(a<0)a=bytes.length+a;
-                          // 独立拷贝，byteOffset=0，避免 DataView 偏移问题
-                          var part=new Uint8Array(bytes.subarray(a,b));
-                          return new Blob([part],{type:ct||''});
+                          return mkBlob(new Uint8Array(bytes.subarray(a,b)));
                         };
+                        nf.arrayBuffer=function(){
+                          return Promise.resolve(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
+                        };
+                        nf.text=function(){try{return Promise.resolve(new TextDecoder('utf-8').decode(bytes));}catch(e){return Promise.resolve('');}};
+                        if(typeof nf.stream!=='function'){
+                          nf.stream=function(){
+                            var self=this,sent=false;
+                            return {get [Symbol.asyncIterator](){return function(){
+                              return {next:function(){
+                                if(sent)return Promise.resolve({done:true,value:undefined});
+                                sent=true;return self.arrayBuffer().then(function(ab){return {done:false,value:ab};});
+                              }};
+                            };}};
+                          };
+                        }
+                        rep('FILE_POLYFILL ok');
                       }catch(err){rep('SLICE_PATCH ERR '+err.message);}
                       rebuilt.add(nf);
                       Object.defineProperty(el,'files',{value:[nf],configurable:true});
