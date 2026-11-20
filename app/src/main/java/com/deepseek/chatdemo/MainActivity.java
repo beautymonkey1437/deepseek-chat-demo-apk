@@ -91,6 +91,29 @@ public class MainActivity extends Activity {
                   get:function(){return this.__k;}
                 });
               }catch(err){rep('ERRHOOK FAIL '+err.message);}
+              // 抓 zip 库的 ArchiveError：它 super(message) + this.name="ArchiveError"，
+              // 给 Error.prototype 的 name setter 装钩子即可截获并显示堆栈
+              try{
+                Object.defineProperty(Error.prototype,'name',{
+                  configurable:true,
+                  set:function(v){
+                    if(v==='ArchiveError'||v==='BackupError'){
+                      rep('THROWN '+v+' | '+(this.message||'')+' | '+String(this.stack||'').slice(0,400));
+                    }
+                    Object.defineProperty(this,'name',{value:v,writable:true,configurable:true,enumerable:false});
+                  },
+                  get:function(){return this.__nm||'Error';}
+                });
+              }catch(err){rep('NAMEHOOK FAIL '+err.message);}
+              try{
+                window.addEventListener('error',function(ev){
+                  rep('WINERR '+(ev.message||'')+' @'+(ev.filename||'').split('/').pop()+':'+(ev.lineno||0));
+                },true);
+                window.addEventListener('unhandledrejection',function(ev){
+                  var r=ev.reason;
+                  rep('REJECT '+(r&&(r.stack||r.message)||String(r)).slice(0,300));
+                });
+              }catch(err){rep('WINERRHOOK FAIL '+err.message);}
               var rebuilt=new WeakSet();
               document.addEventListener('change',function(e){
                 try{
