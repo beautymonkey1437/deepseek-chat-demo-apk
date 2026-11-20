@@ -141,16 +141,27 @@ public class MainActivity extends Activity {
                         nf.slice=function(s,e,ct){
                           var a=s||0, b=(e===undefined||e<0)?bytes.length:Math.min(e,bytes.length);
                           if(a<0)a=bytes.length+a;
-                          var part=bytes.subarray(a,b);
+                          // 独立拷贝，byteOffset=0，避免 DataView 偏移问题
+                          var part=new Uint8Array(bytes.subarray(a,b));
                           return new Blob([part],{type:ct||''});
                         };
                       }catch(err){rep('SLICE_PATCH ERR '+err.message);}
                       rebuilt.add(nf);
                       Object.defineProperty(el,'files',{value:[nf],configurable:true});
                       var head=Array.from(bytes.slice(0,4));
-                      // 验证尾部大偏移 slice 的长度（zip 读 EOCD 用）
-                      var tail=nf.slice(bytes.length-65557,bytes.length);
-                      rep('REBUILD done size='+nf.size+' head='+head.join(',')+' tailLen='+tail.size);
+                      // 用网页相同逻辑自检：EOCD 查找 PK\x05\x06 签名
+                      var eo=null;
+                      try{
+                        var tailStart=Math.max(0,bytes.length-22-65535);
+                        var tailBytes=bytes.subarray(tailStart);
+                        for(var p=tailBytes.length-22;p>=0;p--){
+                          if(tailBytes[p]===0x50&&tailBytes[p+1]===0x4b&&
+                             tailBytes[p+2]===0x05&&tailBytes[p+3]===0x06){eo=p;break;}
+                        }
+                        rep('ZCHECK head='+head.join(',')+' eocdOffset='+eo+
+                            ' entries='+(eo>=0?(tailBytes[eo+10]|tailBytes[eo+11]<<8):'NA'));
+                      }catch(err){rep('ZCHECK ERR '+err.message);}
+                      rep('REBUILD done size='+nf.size+' tailLen='+nf.slice(bytes.length-65557,bytes.length).size);
                       el.dispatchEvent(new Event('change',{bubbles:true}));
                     }catch(err){rep('REBUILD ERR '+err.message);}
                   };
