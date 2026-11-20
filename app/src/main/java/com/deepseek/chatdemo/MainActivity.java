@@ -6,11 +6,13 @@ import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -26,6 +28,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends Activity {
 
@@ -178,19 +182,74 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_FILE_CHOOSER) {
             if (filePathCallback == null) return;
-            Uri[] results = null;
-            if (resultCode == RESULT_OK && data != null) {
-                if (data.getClipData() != null) {
-                    int n = data.getClipData().getItemCount();
-                    results = new Uri[n];
-                    for (int i = 0; i < n; i++) results[i] = data.getClipData().getItemAt(i).getUri();
-                } else if (data.getData() != null) {
-                    results = new Uri[]{data.getData()};
-                }
-            }
-            filePathCallback.onReceiveValue(results);
+            final ValueCallback<Uri[]> cb = filePathCallback;
             filePathCallback = null;
+            if (resultCode != RESULT_OK || data == null) {
+                cb.onReceiveValue(null);
+                return;
+            }
+            // 收集用户选中的文件 URI
+            List<Uri> picked = new ArrayList<>();
+            if (data.getClipData() != null) {
+                int n = data.getClipData().getItemCount();
+                for (int i = 0; i < n; i++) picked.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                picked.add(data.getData());
+            }
+            if (picked.isEmpty()) {
+                cb.onReceiveValue(null);
+                return;
+            }
+            // 关键：把 content:// 临时 URI 复制成 App 缓存里的真实文件，
+            // 再把 file:// 交给网页。华为 WebView 直接读 content:// 会拿到残缺内容，
+            // 导致网页的 ZIP 格式校验失败。
+            final List<Uri> finalPicked = picked;
+            new Thread(() -> {
+                List<Uri> out = new ArrayList<>();
+                boolean ok = true;
+                for (Uri u : finalPicked) {
+                    File cached = copyToCache(u);
+                    if (cached != null) out.add(Uri.fromFile(cached));
+                    else { ok = false; break; }
+                }
+                final Uri[] result = ok ? out.toArray(new Uri[0]) : null;
+                runOnUiThread(() -> {
+                    if (result == null) toastOnUi("读取文件失败，请重试");
+                    cb.onReceiveValue(result);
+                });
+            }).start();
         }
+    }
+
+    // 把 content:// URI 的内容复制到 App 缓存目录，保留原文件名
+    private File copyToCache(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            String name = displayName(uri);
+            if (name == null || name.isEmpty()) name = "import.zip";
+            name = name.replace("/", "_").replace("\\", "_");
+            File dst = new File(getCacheDir(), name);
+            try (OutputStream out = new FileOutputStream(dst)) {
+                byte[] buf = new byte[128 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            return dst.length() > 0 ? dst : null;
+        } catch (Exception e) {
+            Log.e(TAG, "copyToCache failed", e);
+            return null;
+        }
+    }
+
+    private String displayName(Uri uri) {
+        String name = null;
+        try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) name = c.getString(idx);
+            }
+        } catch (Exception ignored) {}
+        return name;
     }
 
     @Override
