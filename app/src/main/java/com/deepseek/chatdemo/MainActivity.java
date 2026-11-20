@@ -189,11 +189,6 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
-        if (Build.VERSION.SDK_INT >= 16) {
-            try { s.setAllowFileAccessFromFileURLs(true); } catch (Exception ignored) {}
-            try { s.setAllowUniversalAccessFromFileURLs(true); } catch (Exception ignored) {}
-        }
-
         webView.addJavascriptInterface(new DownloadBridge(), "DSDownload");
         webView.addJavascriptInterface(new ReportBridge(), "DSReport");
 
@@ -219,7 +214,7 @@ public class MainActivity extends Activity {
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
                 appendDiag("[PICK] onShowFileChooser accept=" + Arrays.toString(params.getAcceptTypes())
-                        + " multiple=" + params.isMultiple());
+                        + " mode=" + params.getMode());
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
                 Intent intent;
