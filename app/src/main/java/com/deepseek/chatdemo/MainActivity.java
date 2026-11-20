@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
     private static final int LOCAL_PORT = 8899;
     private static final String SITE_URL = "http://127.0.0.1:" + LOCAL_PORT + "/";
     private static final String FILES_API = "https://api.deepseek.com/anthropic/v1/files";
+    private static final String ASR_API = "https://api.deepseek.com/v1/tools/asr";
     private LocalServer localServer;
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_WRITE_STORAGE = 1002;
@@ -259,16 +260,19 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void uploadFile(String id, String apiKey, String base64,
-                               String fileName, String mime, String purpose) {
-            toastOnUi("[桥]拦截上传 " + fileName + " " + (base64==null?0:base64.length()) + "字符");
-            new Thread(() -> doUpload(id, apiKey, base64, fileName, mime, purpose), "ds-upload").start();
+                               String fileName, String mime, String purpose,
+                               String authKind, String uploadKind) {
+            toastOnUi("[桥]拦截上传 " + uploadKind + " " + fileName + " " + (base64==null?0:base64.length()) + "字符");
+            new Thread(() -> doUpload(id, apiKey, base64, fileName, mime, purpose, authKind, uploadKind), "ds-upload").start();
         }
     }
 
     private void doUpload(String id, String apiKey, String base64,
-                          String fileName, String mime, String purpose) {
+                          String fileName, String mime, String purpose,
+                          String authKind, String uploadKind) {
         String resultJson;
         boolean ok;
+        boolean isAsr = "asr".equals(uploadKind);
         try {
             byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
             String boundary = "----DSCURLBoundary" + UUID.randomUUID().toString().replace("-", "");
@@ -290,13 +294,18 @@ public class MainActivity extends Activity {
             body.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             byte[] payload = body.toByteArray();
 
-            HttpURLConnection conn = (HttpURLConnection) new URL(FILES_API).openConnection();
+            String endpoint = isAsr ? ASR_API : FILES_API;
+            HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(20000);
             conn.setReadTimeout(120000);
-            conn.setRequestProperty("x-api-key", apiKey == null ? "" : apiKey);
-            conn.setRequestProperty("anthropic-beta", "files-api-2025-04-14");
+            if ("bearer".equals(authKind)) {
+                conn.setRequestProperty("Authorization", "Bearer " + (apiKey == null ? "" : apiKey));
+            } else {
+                conn.setRequestProperty("x-api-key", apiKey == null ? "" : apiKey);
+                conn.setRequestProperty("anthropic-beta", "files-api-2025-04-14");
+            }
             conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
             conn.setFixedLengthStreamingMode(payload.length);
             try (OutputStream os = conn.getOutputStream()) {
