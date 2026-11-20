@@ -76,6 +76,42 @@ public class MainActivity extends Activity {
                 if(!CSS.escape)
                   CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
               }catch(e){}
+              // 旧 WebView 的 fetch 上传 FormData/Blob 有兼容问题（续聊回传附件失败）。
+              // 把带 FormData 的请求改走 XMLHttpRequest，multipart 兼容性更好；
+              // 普通 JSON 请求仍走原生 fetch，不受影响。
+              try{
+                var nativeFetch=window.fetch;
+                if(nativeFetch){
+                  window.fetch=function(url,opt){
+                    try{
+                      if(opt&&opt.body&&(typeof FormData!=='undefined')&&(opt.body instanceof FormData)){
+                        return new Promise(function(resolve,reject){
+                          var xhr=new XMLHttpRequest();
+                          xhr.open(opt.method||'POST',url,true);
+                          try{
+                            var hd=new Headers(opt.headers||{});
+                            hd.forEach(function(v,k){if(String(k).toLowerCase()!=='content-type')xhr.setRequestHeader(k,v);});
+                          }catch(e){}
+                          xhr.onload=function(){
+                            var txt=xhr.responseText||'';
+                            resolve({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,
+                              statusText:xhr.statusText||'',
+                              text:function(){return Promise.resolve(txt);},
+                              json:function(){try{return Promise.resolve(JSON.parse(txt));}catch(e){return Promise.reject(e);}}});
+                          };
+                          xhr.onerror=function(){reject(new TypeError('Network request failed'));};
+                          if(opt.signal){
+                            if(opt.signal.aborted)return reject(opt.signal.reason||new Error('aborted'));
+                            opt.signal.addEventListener('abort',function(){try{xhr.abort();}catch(e){}},{once:true});
+                          }
+                          xhr.send(opt.body);
+                        });
+                      }
+                    }catch(e){}
+                    return nativeFetch.apply(this,arguments);
+                  };
+                }
+              }catch(e){}
               try{
                 if(document.getElementById('__ds_cssfix'))return;
                 var s=document.createElement('style');
@@ -184,8 +220,20 @@ public class MainActivity extends Activity {
                     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     startActivityForResult(Intent.createChooser(intent, "选择文件"), REQ_FILE_CHOOSER);
                 } catch (ActivityNotFoundException e) {
-                    filePathCallback = null;
-                    return false;
+                    // 某些华为机上 createIntent() 生成的类型没有应用处理，
+                    // 回退到通用的 */* 可打开文件选择器
+                    try {
+                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                        fallback.setType("*/*");
+                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                        fallback.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                        fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        startActivityForResult(Intent.createChooser(fallback, "选择文件"), REQ_FILE_CHOOSER);
+                    } catch (ActivityNotFoundException e2) {
+                        filePathCallback = null;
+                        Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
                 }
                 return true;
             }
