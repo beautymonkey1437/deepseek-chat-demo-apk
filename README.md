@@ -21,7 +21,25 @@
 
 本机没装 Java / Android SDK 也能编译，用 GitHub 的免费云主机。
 
-### 装到手机
+### 第一步：把项目传到 GitHub
+
+1. 打开 <https://github.com>，登录（没有就注册，免费）。
+2. 点右上角 `+` → `New repository`。
+3. 仓库名随便填，比如 `deepseek-chat-apk`，选 **Public**（Private 也行，但公开仓库 Cloud 额度最稳），**不要**勾选 "Add a README"。点 `Create repository`。
+4. 在仓库页面点 `uploading an existing file`（或 `Add file` → `Upload files`）。
+5. 把本文件夹里的**所有文件和子文件夹**（包括 `.github`、`app`、`build.gradle`、`settings.gradle`、`gradle.properties`、`gradle/`）全选拖进去，点 `Commit changes`。
+
+> `.github` 是隐藏文件夹，拖拽时确认它一起传上去了；编译全靠它。
+
+### 第二步：等 GitHub 自动编译
+
+1. 传完后点顶部 `Actions` 标签。
+2. 左边点 `Build DeepSeek Chat APK` → 右边点最近的一次运行。
+3. 如果列表里是空的或没自动跑，点 `Run workflow` → `Run workflow` 手动触发一次。
+4. 等 2–5 分钟，跑完（绿色勾）后拉到页面最底部 `Artifacts`，点 **`deepseek-chat-apk`** 下载，得到一个 zip。
+5. 解压 zip，里面就是 `app-debug.apk`。
+
+### 第三步：装到手机
 
 1. 把 `app-debug.apk` 传到手机（微信文件传输助手 / QQ / 数据线都行）。
 2. 在手机上点开它，系统提示"未知来源"时选**允许安装**（需在设置里给浏览器/文件管理器开"安装未知应用"权限）。
@@ -30,7 +48,8 @@
 ## 常见问题
 
 - **Actions 显示红色失败**：点进去看日志。最常见是 `.github/workflows/build-apk.yml` 没传上去，或传的时候漏了 `app/` 子目录。
-- **网页打开空白**：检查手机网络；首次加载要能访问 `cdn.deepseek.com`。
+- **网页打开空白 / 填完 API Key 后白屏**：旧版系统 WebView（如华为机自带 WebView）不支持 CSS 的 `dvh` 视口单位，chat-demo 主框架高度会塌成 0，导致有内容但整片白。本项目已在页面加载后自动注入修复（见 `MainActivity.CSS_FIX`，把 `dvh` 覆盖为 `vh`）。若仍白屏，先确认手机浏览器能正常打开该网址，再看是不是系统 WebView 过旧。
+- **网页打不开**：检查手机网络；首次加载要能访问 `cdn.deepseek.com`。
 - **导出点了几秒没反应**：大 ZIP 要分片传输，几百 MB 可能要十几秒，等一下看 Toast 提示。
 - **"下载"目录找不到文件**：在手机文件管理器里找 `Download` 文件夹，文件名形如 `deepseek_data-xxxx.zip`。
 
