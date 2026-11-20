@@ -259,6 +259,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void toast(String msg) {
+            toastOnUi("[桥]" + msg);
+        }
+
+        @JavascriptInterface
         public void uploadFile(String id, String apiKey, String base64,
                                String fileName, String mime, String purpose,
                                String authKind, String uploadKind) {
