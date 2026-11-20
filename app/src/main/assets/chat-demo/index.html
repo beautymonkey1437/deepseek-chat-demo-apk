@@ -25,6 +25,7 @@
   if(window.__dsUploadBridge) return;
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
+  function toast(s){ try{ if(window.DSNative && window.DSNative.toast) window.DSNative.toast(s); }catch(e){} }
 
   // 图片处理：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
   // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断）。
@@ -70,6 +71,7 @@
         e.stopPropagation();
         e.preventDefault();
         log('rebuild image '+(f.name||'')+' '+f.size);
+        toast('图片重建开始 size='+f.size);
         var fr = new FileReader();
         fr.onload = function(){
           try{
@@ -81,6 +83,7 @@
             var fire = function(){
               setInputFiles(el, nf);
               log('rebuild done size='+nf.size+' dataUrl='+(imgDataUrls.get(nf)?'yes':'no'));
+              toast('图片重建完成 size='+nf.size+' dataUrl='+(imgDataUrls.get(nf)?'yes':'no'));
               el.dispatchEvent(new Event('change', {bubbles:true}));
             };
             fr2.onload = function(){ try{ imgDataUrls.set(nf, fr2.result); }catch(e){} fire(); };
@@ -139,6 +142,7 @@
         var body = opt.body || (req && req.formData ? null : null);
         var method = (opt.method || (req && req.method) || 'GET').toUpperCase();
         log('FILES req url='+url+' method='+method+' hasInitBody='+!!opt.body+' hasDSNative='+!!(window.DSNative&&window.DSNative.uploadFile));
+        toast('拦截到请求 '+(isAsr?'ASR':'文件')+' body='+!!opt.body);
         // 情况A：(url,{body:FormData})
         if(body && typeof FormData!=='undefined' && (body instanceof FormData || (body.get && body.append))){
           var headers = opt.headers || (req && req.headers) || {};
