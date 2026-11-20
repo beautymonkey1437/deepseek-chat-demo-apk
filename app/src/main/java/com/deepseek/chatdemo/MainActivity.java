@@ -101,7 +101,12 @@ public class MainActivity extends Activity {
                       var nf=new File([bytes],f.name,{type:f.type||'application/zip'});
                       rebuilt.add(nf);
                       Object.defineProperty(el,'files',{value:[nf],configurable:true});
-                      rep('REBUILD done inMemory size='+nf.size+' slice4='+nf.slice(0,4).size);
+                      // 前4字节应等于 PK 03 04；并验证 slice().arrayBuffer() 是否可用
+                      var head=Array.from(bytes.slice(0,4));
+                      rep('REBUILD done size='+nf.size+' slice4='+nf.slice(0,4).size+' head='+head.join(','));
+                      nf.slice(0,4).arrayBuffer().then(function(ab){
+                        rep('SLICE_AB len='+ab.byteLength+' bytes='+Array.from(new Uint8Array(ab)).join(','));
+                      }).catch(function(err){rep('SLICE_AB ERR '+err.message);});
                       el.dispatchEvent(new Event('change',{bubbles:true}));
                     }catch(err){rep('REBUILD ERR '+err.message);}
                   };
