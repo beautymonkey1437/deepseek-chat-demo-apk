@@ -33,7 +33,11 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,9 +46,12 @@ import java.util.UUID;
 public class MainActivity extends Activity {
 
     private static final String TAG = "DSChatAPK";
-    // 本地内置官方 chat-demo（低审核版），不再依赖外网域名
-    private static final String SITE_URL = "file:///android_asset/chat-demo/index.html";
+    // 本地内置官方 chat-demo（低审核版）。用本地 HTTP 服务提供，
+    // 让页面有正常的 http origin（file:// 下getUserMedia/文件选择等能力被限制）。
+    private static final int LOCAL_PORT = 8899;
+    private static final String SITE_URL = "http://127.0.0.1:" + LOCAL_PORT + "/";
     private static final String FILES_API = "https://api.deepseek.com/anthropic/v1/files";
+    private LocalServer localServer;
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_WRITE_STORAGE = 1002;
 
@@ -189,6 +196,14 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_WRITE_STORAGE);
         }
 
+        // 启动本地 HTTP 服务，把 assets 里的 chat-demo 提供出去
+        try {
+            localServer = new LocalServer(LOCAL_PORT);
+            localServer.start();
+        } catch (Exception e) {
+            Log.e(TAG, "local server start failed", e);
+            toastOnUi("本地服务启动失败");
+        }
         webView.loadUrl(SITE_URL);
     }
 
@@ -379,7 +394,113 @@ public class MainActivity extends Activity {
         if (currentOut != null) {
             try { currentOut.close(); } catch (Exception ignored) {}
         }
+        if (localServer != null) localServer.shutdown();
         super.onDestroy();
+    }
+
+    // ============ 本地静态服务器：把 assets/chat-demo 以 http 提供 ============
+    private class LocalServer extends Thread {
+        private final int port;
+        private ServerSocket server;
+        private volatile boolean running = true;
+
+        LocalServer(int port) { this.port = port; setName("ds-local-server"); }
+
+        void shutdown() {
+            running = false;
+            try { if (server != null) server.close(); } catch (Exception ignored) {}
+        }
+
+        @Override
+        public void run() {
+            try {
+                server = new ServerSocket();
+                server.setReuseAddress(true);
+                server.bind(new InetSocketAddress("127.0.0.1", port));
+                while (running) {
+                    try {
+                        Socket client = server.accept();
+                        handle(client);
+                    } catch (Exception e) {
+                        if (running) Log.e(TAG, "accept failed", e);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "server run failed", e);
+            }
+        }
+
+        private void handle(Socket client) {
+            try {
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+                String line = reader.readLine();
+                if (line == null || line.isEmpty()) { client.close(); return; }
+                // GET /path HTTP/1.1
+                String[] parts = line.split(" ");
+                String path = parts.length > 1 ? parts[1] : "/";
+                while ((line = reader.readLine()) != null && !line.isEmpty()) { /* 跳过 header */ }
+                int q = path.indexOf('?');
+                if (q >= 0) path = path.substring(0, q);
+                String rel = URLDecoder.decode(path, "UTF-8");
+                if (rel.equals("/") || rel.isEmpty()) rel = "/index.html";
+                while (rel.startsWith("/")) rel = rel.substring(1);
+
+                byte[] data = readAsset("chat-demo/" + rel);
+                if (data == null) {
+                    String resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    client.getOutputStream().write(resp.getBytes(StandardCharsets.US_ASCII));
+                    client.getOutputStream().flush();
+                    client.close();
+                    return;
+                }
+                String mime = mimeFor(rel);
+                String head = "HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: " + mime + "\r\n"
+                        + "Content-Length: " + data.length + "\r\n"
+                        + "Cache-Control: no-cache\r\n"
+                        + "Connection: close\r\n\r\n";
+                OutputStream os = client.getOutputStream();
+                os.write(head.getBytes(StandardCharsets.US_ASCII));
+                os.write(data);
+                os.flush();
+                client.close();
+            } catch (Exception e) {
+                Log.e(TAG, "handle request failed", e);
+                try { client.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        private byte[] readAsset(String name) {
+            InputStream in = null;
+            try {
+                in = getAssets().open(name);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                return bos.toByteArray();
+            } catch (Exception e) {
+                return null;
+            } finally {
+                if (in != null) try { in.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        private String mimeFor(String path) {
+            String p = path.toLowerCase();
+            if (p.endsWith(".html") || p.endsWith(".htm")) return "text/html; charset=utf-8";
+            if (p.endsWith(".js")) return "application/javascript; charset=utf-8";
+            if (p.endsWith(".css")) return "text/css; charset=utf-8";
+            if (p.endsWith(".json")) return "application/json; charset=utf-8";
+            if (p.endsWith(".woff2")) return "font/woff2";
+            if (p.endsWith(".woff")) return "font/woff";
+            if (p.endsWith(".ttf")) return "font/ttf";
+            if (p.endsWith(".svg")) return "image/svg+xml";
+            if (p.endsWith(".png")) return "image/png";
+            if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+            return "application/octet-stream";
+        }
     }
 
     private void toastOnUi(final String msg) {
