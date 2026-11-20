@@ -79,6 +79,27 @@ public class MainActivity extends Activity {
               if(window.__dsFileMon)return;
               window.__dsFileMon=true;
               function rep(s){if(window.DSReport)window.DSReport.report(s);}
+              // polyfill 网页用到但旧 WebView 可能缺失的新方法
+              try{
+                if(!Array.prototype.toSorted)Array.prototype.toSorted=function(c){return this.slice().sort(c);};
+                if(!Array.prototype.at)Array.prototype.at=function(i){i=i||0;return i<0?this[this.length+i]:this[i];};
+                rep('POLYFILL_METHODS ok');
+              }catch(e){}
+              // 包装 Error 构造函数：任何 new Error/BackupError/ArchiveError 都能抓到堆栈
+              try{
+                var RealError=Error;
+                function TrackedError(){
+                  var e=new RealError(arguments[0]);
+                  var st=String(e.stack||'');
+                  if(/Invalid|backup|925|archive/i.test(String(arguments[0])+' '+st)){
+                    rep('NEWERR '+(arguments[0]||'')+' | '+st.slice(0,400));
+                  }
+                  return e;
+                }
+                TrackedError.prototype=RealError.prototype;
+                try{Object.setPrototypeOf(TrackedError,RealError);}catch(e){}
+                window.Error=TrackedError;
+              }catch(err){rep('ERRCTOR FAIL '+err.message);}
               // 抓网页吞掉的真实错误码：BackupError 构造时执行 this.key=e，
               // 在 Error.prototype 上装 key 的 setter 即可截获。
               try{
