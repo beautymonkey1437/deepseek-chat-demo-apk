@@ -25,6 +25,42 @@
   if(window.__dsUploadBridge) return;
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
+
+  // 图片文件重建：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
+  // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断，导致图片传不上去）。
+  // 这里把图片读成字节后重建成纯内存 File，脱离 content:// 来源。
+  try{
+    var imgDone = new WeakSet();
+    document.addEventListener('change', function(e){
+      try{
+        var el = e.target;
+        if(!el || el.tagName!=='INPUT' || el.type!=='file') return;
+        var files = el.files;
+        if(!files || !files.length) return;
+        var f = files[0];
+        if(!f.type || f.type.indexOf('image/')!==0) return;   // 只处理图片
+        if(imgDone.has(f)) return;
+        imgDone.add(f);
+        e.stopPropagation();
+        e.preventDefault();
+        log('rebuild image '+(f.name||'')+' '+f.size);
+        var fr = new FileReader();
+        fr.onload = function(){
+          try{
+            var bytes = new Uint8Array(fr.result);
+            var nf = new File([bytes], f.name||'image.jpg', {type:f.type, lastModified:f.lastModified});
+            imgDone.add(nf);
+            Object.defineProperty(el, 'files', {value:[nf], configurable:true});
+            log('rebuild done size='+nf.size);
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+          }catch(err){ log('rebuild err '+err.message); }
+        };
+        fr.onerror = function(){ log('rebuild read err'); };
+        fr.readAsArrayBuffer(f);
+      }catch(err){}
+    }, true);
+  }catch(e){}
+
   var nativeFetch = window.fetch;
   if(!nativeFetch) return;
 
@@ -55,42 +91,73 @@
   }
 
   window.fetch = function(input, init){
-    var url = (typeof input==='string') ? input : (input && input.url) || '';
-    var opt = init || {};
-    try{
-      if(url.indexOf('/anthropic/v1/files')>=0 && opt.body && (typeof FormData!=='undefined') && (opt.body instanceof FormData) && window.DSNative && window.DSNative.uploadFile){
-        log('intercept file upload to '+url);
-        var fd = opt.body;
-        var headers = opt.headers || {};
-        // headers 可能是普通对象或 Headers
-        var apiKey = '';
-        try{
-          if(headers.get) apiKey = headers.get('x-api-key') || '';
-          else { for(var k in headers){ if(String(k).toLowerCase()==='x-api-key'){ apiKey=headers[k]; break; } } }
-        }catch(e){}
-        var file = fd.get ? fd.get('file') : null;
-        var purpose = fd.get ? fd.get('purpose') : null;
-        var name = (file && file.name) || 'file';
-        var type = (file && file.type) || 'application/octet-stream';
-        var size = file && file.size || 0;
-        log('key='+(apiKey?apiKey.slice(0,6)+'...':'none')+' file='+name+' type='+type+' size='+size+' purpose='+purpose);
-        return toB64(file).then(function(b64){
-          log('b64 len='+b64.length);
-          return new Promise(function(resolve,reject){
-            // 原生通过 DSUploadDone(id, json, ok) 回调
-            var id = 'up_'+(Date.now())+'_'+Math.random().toString(36).slice(2);
-            window.__dsUploadCbs = window.__dsUploadCbs || {};
-            window.__dsUploadCbs[id] = function(json, ok){
-              log('native done ok='+ok+' json='+String(json).slice(0,120));
-              try{ resolve(wrapResponse(json, ok!==false, ok===false?400:200)); }
+    // 兼容 Request 对象 和 (url, init) 两种调用形式
+    var url = '', opt = init || {}, req = null;
+    if(input && typeof input==='object' && input.url){
+      url = input.url; req = input;
+      // Request.body 是 ReadableStream，无法直接读；用 init 覆盖或克隆
+    } else {
+      url = typeof input==='string' ? input : (input && input.url) || '';
+    }
+    var isFiles = url.indexOf('/anthropic/v1/files')>=0 || url.indexOf('/files')>=0;
+    if(isFiles){
+      try{
+        var body = opt.body || (req && req.formData ? null : null);
+        var method = (opt.method || (req && req.method) || 'GET').toUpperCase();
+        log('FILES req url='+url+' method='+method+' hasInitBody='+!!opt.body+' hasDSNative='+!!(window.DSNative&&window.DSNative.uploadFile));
+        // 情况A：(url,{body:FormData})
+        if(body && typeof FormData!=='undefined' && (body instanceof FormData || (body.get && body.append))){
+          var headers = opt.headers || (req && req.headers) || {};
+          var apiKey = '';
+          try{
+            if(headers.get) apiKey = headers.get('x-api-key') || '';
+            else { for(var k in headers){ if(String(k).toLowerCase()==='x-api-key'){ apiKey=headers[k]; break; } } }
+          }catch(e){}
+          var file = body.get ? body.get('file') : null;
+          var purpose = body.get ? body.get('purpose') : null;
+          var name = (file && file.name) || 'upload';
+          var type = (file && file.type) || 'application/octet-stream';
+          var size = (file && file.size) || 0;
+          log('A file='+name+' size='+size+' key='+(apiKey?apiKey.slice(0,6):'none'));
+          return toB64(file).then(function(b64){
+            return new Promise(function(resolve,reject){
+              var id='up_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+              window.__dsUploadCbs=window.__dsUploadCbs||{};
+              window.__dsUploadCbs[id]=function(json,ok){
+                try{resolve(wrapResponse(json,ok!==false,ok===false?400:200));}catch(e){reject(e);}
+              };
+              try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||''); }
               catch(e){ reject(e); }
-            };
-            try{ window.DSNative.uploadFile(id, apiKey, b64, name, type, purpose||''); }
-            catch(e){ reject(e); }
-          });
-        }).catch(function(e){ log('ERR '+e.message); throw e; });
-      }
-    }catch(e){ log('detect ERR '+e.message); }
+            });
+          }).catch(function(e){ log('A ERR '+e.message); throw e; });
+        }
+        // 情况B：Request 对象携带 body —— 异步取 formData
+        if(req && req.clone && true){
+          try{
+            return req.clone().formData().then(function(fd){
+              var headers = req.headers || {};
+              var apiKey = headers.get ? headers.get('x-api-key') || '' : '';
+              var file = fd.get('file');
+              var purpose = fd.get('purpose');
+              var name = (file && file.name) || 'upload';
+              var type = (file && file.type) || 'application/octet-stream';
+              log('B file='+name+' size='+(file&&file.size||0));
+              return toB64(file).then(function(b64){
+                return new Promise(function(resolve,reject){
+                  var id='up_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+                  window.__dsUploadCbs=window.__dsUploadCbs||{};
+                  window.__dsUploadCbs[id]=function(json,ok){
+                    try{resolve(wrapResponse(json,ok!==false,ok===false?400:200));}catch(e){reject(e);}
+                  };
+                  try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||''); }
+                  catch(e){ reject(e); }
+                });
+              });
+            }).catch(function(e){ log('B ERR '+e.message); return nativeFetch.apply(window,arguments); });
+          }catch(e){}
+        }
+      }catch(e){ log('detect ERR '+e.message); }
+    }
     return nativeFetch.apply(this, arguments);
   };
 
