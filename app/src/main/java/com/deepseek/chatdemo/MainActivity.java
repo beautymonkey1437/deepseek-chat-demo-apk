@@ -231,7 +231,7 @@ public class MainActivity extends Activity {
                         startActivityForResult(Intent.createChooser(fallback, "选择文件"), REQ_FILE_CHOOSER);
                     } catch (ActivityNotFoundException e2) {
                         filePathCallback = null;
-                        Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
                         return false;
                     }
                 }
