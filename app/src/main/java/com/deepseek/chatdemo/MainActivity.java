@@ -333,7 +333,13 @@ public class MainActivity extends Activity {
                     File cached = copyToCache(u);
                     if (cached != null) {
                         appendDiag("[COPY] -> " + cached.getAbsolutePath() + " size=" + cached.length());
-                        out.add(Uri.fromFile(cached));
+                        // 用 FileProvider 的 content:// 交给网页，而不是 file://
+                        // 华为 WebView 禁止 JS 读 file://，但允许读带授权的 content://
+                        Uri contentUri = androidx.core.content.FileProvider.getUriForFile(
+                                MainActivity.this, getPackageName() + ".fileprovider", cached);
+                        grantUriPermission(getPackageName(), contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        out.add(contentUri);
+                        appendDiag("[COPY] -> content uri " + contentUri);
                     } else { ok = false; appendDiag("[COPY] FAILED"); break; }
                 }
                 final Uri[] result = ok ? out.toArray(new Uri[0]) : null;
