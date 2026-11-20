@@ -1,15 +1,19 @@
-# DeepSeek Chat APK（chat-demo 封装）
+# DeepSeek Chat APK（chat-demo 本地版）
 
-把 `https://cdn.deepseek.com/chat-demo` 封装成一个独立 Android App。聊天记录和本地图片存在 App 私有存储里，**清浏览器缓存不会丢**。
+把 DeepSeek 官方开源的 chat-demo 静态页面**内置进 APK**，做成独立 Android App。聊天记录和本地图片存在 App 私有存储里，**清浏览器缓存不会丢**。
 
 ## 它做了什么
 
-- 全屏 WebView 加载官方 chat-demo，页面本身一行不改，功能就是网页原生的。
+- **内置官方 chat-demo v0.1.3**（MIT 协议，源码在 `github.com/deepseek-ai/chat-demo`），页面文件在 `app/src/main/assets/chat-demo/`，不再依赖 `cdn.deepseek.com`。
+- **关闭内容外审**：把源码里的 `safety_check` 从 `high` 改为 `low`（API 默认审核），对话风格更贴近原始体验。
+- **兼容老 WebView**：页面里内置了 `toSorted`/`at`/`Object.hasOwn` 等新方法的 polyfill 和 `dvh`→`vh` 修复，解决华为等老机型白屏、导入失败问题。
+- **附件上传走原生**：老 WebView 的 `fetch`+`FormData` 上传有 bug，改为把文件通过 JS 桥交给 Android 用原生 `HttpURLConnection` 上传，绕开内核问题。
+- **导入 ZIP**：接上系统文件选择器 + FileProvider，选文件稳定。
+- **导出 ZIP**：拦截网页的 `blob:` 下载，分片写进手机「下载」目录（大文件也不会失败）。
 - 打开 `localStorage` + `IndexedDB`，网页设置、API Key、会话、图片都能存进 App 私有目录。
-- 补上 WebView 默认缺的两座桥：
-  - **导入 ZIP**：接上系统文件选择器，点击网页的 Upload 能选文件。
-  - **导出 ZIP**：拦截网页的 `blob:` 下载，分片写进手机「下载」目录（大文件也不会失败）。
 - 返回键：先在网页内回退，到首页再退出 App。
+
+> 注意：首次使用仍需联网（要调 DeepSeek API 填 Key）；但页面本身是本地的，不依赖外网域名。
 
 ## 重要提醒（先看）
 
@@ -48,16 +52,11 @@
 ## 常见问题
 
 - **Actions 显示红色失败**：点进去看日志。最常见是 `.github/workflows/build-apk.yml` 没传上去，或传的时候漏了 `app/` 子目录。
-- **网页打开空白 / 填完 API Key 后白屏**：旧版系统 WebView（如华为机自带 WebView）不支持 CSS 的 `dvh` 视口单位，chat-demo 主框架高度会塌成 0，导致有内容但整片白。本项目已在页面加载后自动注入修复（见 `MainActivity.CSS_FIX`，把 `dvh` 覆盖为 `vh`）。若仍白屏，先确认手机浏览器能正常打开该网址，再看是不是系统 WebView 过旧。
+- **网页打开空白 / 填完 API Key 后白屏**：旧版系统 WebView（如华为机自带 WebView）不支持 CSS 的 `dvh` 视口单位，chat-demo 主框架高度会塌成 0，导致有内容但整片白。本项目已在页面加载后自动注入修复（见 `MainActivity.COMPAT_JS`）。
+- **导入 ZIP 报"文件格式错误"**：旧 WebView 缺少 `Array.toSorted()` / `at()` 等新方法，chat-demo 导入逻辑用到会直接失败。`COMPAT_JS` 里已 polyfill 这两个方法，导入可正常完成（已在华为 Mate 20 Pro 验证导入 54 个会话成功）。
 - **网页打不开**：检查手机网络；首次加载要能访问 `cdn.deepseek.com`。
 - **导出点了几秒没反应**：大 ZIP 要分片传输，几百 MB 可能要十几秒，等一下看 Toast 提示。
 - **"下载"目录找不到文件**：在手机文件管理器里找 `Download` 文件夹，文件名形如 `deepseek_data-xxxx.zip`。
-
-## 未解决问题
-
-- **老手机低版本WebView无法适配附件相关功能，只能导入纯文字会话记录。因此未做文件选择器，无法上传附件，也就是说附件相关功能都没适配。
-
-
 
 ## 文件结构
 

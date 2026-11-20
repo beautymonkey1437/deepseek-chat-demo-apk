@@ -23,113 +23,39 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 public class MainActivity extends Activity {
 
     private static final String TAG = "DSChatAPK";
-    private static final String SITE_URL = "https://cdn.deepseek.com/chat-demo/";
+    // 本地内置官方 chat-demo（低审核版），不再依赖外网域名
+    private static final String SITE_URL = "file:///android_asset/chat-demo/index.html";
+    private static final String FILES_API = "https://api.deepseek.com/anthropic/v1/files";
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_WRITE_STORAGE = 1002;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
 
-    // 导出用：把网页 blob 分片写到临时文件，最后落到 Downloads
+    // 导出用
     private OutputStream currentOut;
     private String currentName;
     private File currentTemp;
 
-    // 页面加载后注入的兼容修复：
-    // 1) dvh -> vh：旧 WebView 不认 dvh，主框架高度塌成 0 导致白屏
-    // 2) toSorted/at polyfill：chat-demo 导入逻辑用到这两个新方法，
-    //    旧 WebView 缺失会让 ZIP 导入直接失败（这是导入成功的关键）
-    private static final String COMPAT_JS = """
-            (function(){
-              try{
-                // ES2022/2023 新方法，旧 WebView 缺失会让会话渲染/导入直接抛错
-                if(!Array.prototype.toSorted)
-                  Array.prototype.toSorted=function(c){return this.slice().sort(c);};
-                if(!Array.prototype.toReversed)
-                  Array.prototype.toReversed=function(){return this.slice().reverse();};
-                if(!Array.prototype.toSpliced)
-                  Array.prototype.toSpliced=function(){var a=this.slice();return a.splice.apply(a,arguments),a;};
-                if(!Array.prototype.with)
-                  Array.prototype.with=function(i,v){var a=this.slice();a[i<0?a.length+i:i]=v;return a;};
-                if(!Array.prototype.at)
-                  Array.prototype.at=function(i){i=i||0;return i<0?this[this.length+i]:this[i];};
-                if(!Array.prototype.findLast)
-                  Array.prototype.findLast=function(f){for(var i=this.length-1;i>=0;i--)if(f(this[i],i,this))return this[i];};
-                if(!Array.prototype.findLastIndex)
-                  Array.prototype.findLastIndex=function(f){for(var i=this.length-1;i>=0;i--)if(f(this[i],i,this))return i;return -1;};
-                if(!Object.hasOwn)
-                  Object.hasOwn=function(o,k){return Object.prototype.hasOwnProperty.call(o,k);};
-                if(!Object.groupBy)
-                  Object.groupBy=function(a,f){var o=Object.create(null);a.forEach(function(x){var k=f(x);(o[k]||(o[k]=[])).push(x);});return o;};
-                if(typeof CSS==='undefined')window.CSS={};
-                if(!CSS.escape)
-                  CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
-              }catch(e){}
-              // 旧 WebView 的 fetch 上传 FormData/Blob 有兼容问题（续聊回传附件失败）。
-              // 把带 FormData 的请求改走 XMLHttpRequest，multipart 兼容性更好；
-              // 普通 JSON 请求仍走原生 fetch，不受影响。
-              try{
-                var nativeFetch=window.fetch;
-                if(nativeFetch){
-                  window.fetch=function(url,opt){
-                    try{
-                      if(opt&&opt.body&&(typeof FormData!=='undefined')&&(opt.body instanceof FormData)){
-                        return new Promise(function(resolve,reject){
-                          var xhr=new XMLHttpRequest();
-                          xhr.open(opt.method||'POST',url,true);
-                          try{
-                            var hd=new Headers(opt.headers||{});
-                            hd.forEach(function(v,k){if(String(k).toLowerCase()!=='content-type')xhr.setRequestHeader(k,v);});
-                          }catch(e){}
-                          xhr.onload=function(){
-                            var txt=xhr.responseText||'';
-                            resolve({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,
-                              statusText:xhr.statusText||'',
-                              text:function(){return Promise.resolve(txt);},
-                              json:function(){try{return Promise.resolve(JSON.parse(txt));}catch(e){return Promise.reject(e);}}});
-                          };
-                          xhr.onerror=function(){reject(new TypeError('Network request failed'));};
-                          if(opt.signal){
-                            if(opt.signal.aborted)return reject(opt.signal.reason||new Error('aborted'));
-                            opt.signal.addEventListener('abort',function(){try{xhr.abort();}catch(e){}},{once:true});
-                          }
-                          xhr.send(opt.body);
-                        });
-                      }
-                    }catch(e){}
-                    return nativeFetch.apply(this,arguments);
-                  };
-                }
-              }catch(e){}
-              try{
-                if(document.getElementById('__ds_cssfix'))return;
-                var s=document.createElement('style');
-                s.id='__ds_cssfix';
-                s.textContent=':root{--app-viewport-height:100vh!important;--app-viewport-top:0px!important}'
-                  +'html,body{height:100%!important;margin:0!important}'
-                  +'#root{height:100vh!important;min-height:100vh!important}'
-                  +'#root>div{height:100vh!important;min-height:100vh!important}'
-                  +'[class*=frame-]{height:100vh!important}';
-                document.head.appendChild(s);
-                var fs=document.querySelectorAll('[class*=frame-]');
-                for(var i=0;i<fs.length;i++)fs[i].style.setProperty('height','100vh','important');
-              }catch(e){}
-            })();
-            """;
-
-    // 导出用：拦截 <a download href="blob:...">.click()，把 blob 按 256KB 分片
-    // 经 JS 桥传回 App 写入 Downloads，避免大 ZIP 一次性传输失败。
+    // 导出用：拦截 <a download href="blob:...">.click()，分片经 JS 桥写 Downloads
     private static final String DOWNLOAD_HOOK = """
             (function(){
               if (window.__dsDownloadHooked) return;
@@ -148,11 +74,9 @@ public class MainActivity extends Activity {
                   var name = this.getAttribute('download');
                   if (href.indexOf('blob:') === 0 && name && blobs[href]) {
                     var blob = blobs[href];
-                    var CHUNK = 256 * 1024;
-                    var offset = 0;
+                    var CHUNK = 256 * 1024, offset = 0;
                     function sendChunk(){
                       var end = Math.min(offset + CHUNK, blob.size);
-                      var slice = blob.slice(offset, end);
                       var fr = new FileReader();
                       fr.onload = function(){
                         var dataUrl = String(fr.result);
@@ -161,11 +85,11 @@ public class MainActivity extends Activity {
                         var last = end >= blob.size;
                         try { window.DSDownload.saveChunk(name, b64, last); } catch(e){}
                         offset = end;
-                        if (!last) { sendChunk(); }
+                        if (!last) sendChunk();
                         else { try { URL.revokeObjectURL(href); } catch(e){} delete blobs[href]; }
                       };
                       fr.onerror = function(){};
-                      fr.readAsDataURL(slice);
+                      fr.readAsDataURL(blob.slice(offset, end));
                     }
                     sendChunk();
                     return;
@@ -185,11 +109,13 @@ public class MainActivity extends Activity {
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
-        // localStorage（设置/API Key）+ IndexedDB（会话/图片）都要开
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
+        // 让 file:// 页面能加载同目录的相对资源
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         s.setMediaPlaybackRequiresUserGesture(false);
@@ -198,11 +124,11 @@ public class MainActivity extends Activity {
         }
 
         webView.addJavascriptInterface(new DownloadBridge(), "DSDownload");
+        webView.addJavascriptInterface(new NativeBridge(), "DSNative");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                view.evaluateJavascript(COMPAT_JS, null);
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
             }
         });
@@ -220,8 +146,6 @@ public class MainActivity extends Activity {
                     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     startActivityForResult(Intent.createChooser(intent, "选择文件"), REQ_FILE_CHOOSER);
                 } catch (ActivityNotFoundException e) {
-                    // 某些华为机上 createIntent() 生成的类型没有应用处理，
-                    // 回退到通用的 */* 可打开文件选择器
                     try {
                         Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
                         fallback.setType("*/*");
@@ -270,8 +194,6 @@ public class MainActivity extends Activity {
                 cb.onReceiveValue(null);
                 return;
             }
-            // 把 content:// 复制成 App 缓存里的真实文件，再用 FileProvider 的
-            // content:// 交给网页（华为 WebView 禁止 JS 读 file://）
             final List<Uri> finalPicked = picked;
             new Thread(() -> {
                 List<Uri> out = new ArrayList<>();
@@ -291,6 +213,103 @@ public class MainActivity extends Activity {
                     cb.onReceiveValue(result);
                 });
             }).start();
+        }
+    }
+
+    // ============ 原生上传：绕开 WebView 的 fetch/FormData ============
+    public class NativeBridge {
+        @JavascriptInterface
+        public void log(String msg) {
+            Log.d(TAG, msg);
+        }
+
+        @JavascriptInterface
+        public void uploadFile(String id, String apiKey, String base64,
+                               String fileName, String mime, String purpose) {
+            new Thread(() -> doUpload(id, apiKey, base64, fileName, mime, purpose), "ds-upload").start();
+        }
+    }
+
+    private void doUpload(String id, String apiKey, String base64,
+                          String fileName, String mime, String purpose) {
+        String resultJson;
+        boolean ok;
+        try {
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            String boundary = "----DSCURLBoundary" + UUID.randomUUID().toString().replace("-", "");
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            // purpose 字段（如果有）
+            if (purpose != null && !purpose.isEmpty()) {
+                body.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+                body.write(("Content-Disposition: form-data; name=\"purpose\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                body.write(purpose.getBytes(StandardCharsets.UTF_8));
+                body.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            }
+            // file 字段
+            body.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+            String safeName = (fileName == null || fileName.isEmpty()) ? "file" : fileName.replace("\"", "_");
+            String safeMime = (mime == null || mime.isEmpty()) ? "application/octet-stream" : mime;
+            body.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + safeName + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+            body.write(("Content-Type: " + safeMime + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            body.write(bytes);
+            body.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            byte[] payload = body.toByteArray();
+
+            HttpURLConnection conn = (HttpURLConnection) new URL(FILES_API).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(120000);
+            conn.setRequestProperty("x-api-key", apiKey == null ? "" : apiKey);
+            conn.setRequestProperty("anthropic-beta", "files-api-2025-04-14");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setFixedLengthStreamingMode(payload.length);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload);
+                os.flush();
+            }
+            int code = conn.getResponseCode();
+            InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+            String resp = readAllText(is);
+            conn.disconnect();
+            ok = (code >= 200 && code < 300);
+            resultJson = resp == null || resp.isEmpty() ? "{}" : resp;
+            Log.d(TAG, "upload code=" + code + " resp=" + resultJson.substring(0, Math.min(200, resultJson.length())));
+        } catch (Exception e) {
+            Log.e(TAG, "upload failed", e);
+            ok = false;
+            resultJson = "{\"error\":{\"message\":\"" + escapeJson(e.getMessage() == null ? "upload failed" : e.getMessage()) + "\"}}";
+        }
+        final boolean fOk = ok;
+        final String fJson = resultJson;
+        runOnUiThread(() -> {
+            try {
+                String js = "window.DSUploadDone && window.DSUploadDone("
+                        + jsString(id) + "," + jsString(fJson) + "," + fOk + ");";
+                webView.evaluateJavascript(js, null);
+            } catch (Exception e) {
+                Log.e(TAG, "upload callback failed", e);
+            }
+        });
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+    }
+
+    private static String jsString(String s) {
+        if (s == null) return "''";
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r") + "'";
+    }
+
+    private static String readAllText(InputStream in) throws Exception {
+        if (in == null) return "";
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            return sb.toString();
         }
     }
 
