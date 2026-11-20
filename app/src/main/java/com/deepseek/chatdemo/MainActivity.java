@@ -138,7 +138,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
-                toastOnUi("本地版v2 已加载");
+                toastOnUi("V4-HTTP版 已加载");
             }
         });
 
@@ -165,26 +165,23 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
+                toastOnUi("[V4]文件选择触发");
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
-                Intent intent;
+                // 直接用通用 */* 选择器，不依赖 params.createIntent() 的
+                // 特殊 accept 类型（华为机上常找不到处理应用）
                 try {
-                    intent = params.createIntent();
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivityForResult(Intent.createChooser(intent, "选择文件"), REQ_FILE_CHOOSER);
+                    Intent pick = new Intent(Intent.ACTION_GET_CONTENT);
+                    pick.setType("*/*");
+                    pick.addCategory(Intent.CATEGORY_OPENABLE);
+                    pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    pick.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    startActivityForResult(Intent.createChooser(pick, "选择文件"), REQ_FILE_CHOOSER);
                 } catch (ActivityNotFoundException e) {
-                    try {
-                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
-                        fallback.setType("*/*");
-                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
-                        fallback.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-                        fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        startActivityForResult(Intent.createChooser(fallback, "选择文件"), REQ_FILE_CHOOSER);
-                    } catch (ActivityNotFoundException e2) {
-                        filePathCallback = null;
-                        Toast.makeText(MainActivity.this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
-                        return false;
-                    }
+                    filePathCallback = null;
+                    toastOnUi("没有可用的文件选择器");
+                    return false;
                 }
                 return true;
             }
@@ -200,9 +197,10 @@ public class MainActivity extends Activity {
         try {
             localServer = new LocalServer(LOCAL_PORT);
             localServer.start();
+            toastOnUi("V4 本地HTTP服务OK 8899");
         } catch (Exception e) {
             Log.e(TAG, "local server start failed", e);
-            toastOnUi("本地服务启动失败");
+            toastOnUi("V4 本地服务启动失败 " + e.getMessage());
         }
         webView.loadUrl(SITE_URL);
     }
@@ -214,6 +212,7 @@ public class MainActivity extends Activity {
             if (filePathCallback == null) return;
             final ValueCallback<Uri[]> cb = filePathCallback;
             filePathCallback = null;
+            toastOnUi("[V4]文件选择返回 code=" + resultCode + " data=" + (data != null));
             if (resultCode != RESULT_OK || data == null) {
                 cb.onReceiveValue(null);
                 return;
