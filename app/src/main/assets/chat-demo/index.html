@@ -12,6 +12,21 @@
     if(!Object.groupBy)Object.groupBy=function(a,f){var o=Object.create(null);a.forEach(function(x){var k=f(x);(o[k]||(o[k]=[])).push(x);});return o;};
     if(typeof CSS==='undefined')window.CSS={};
     if(!CSS.escape)CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
+    // 老 WebView 的 HTMLImageElement.decode() 对 blob/data URL  unreliable，
+    // 用 onload/onerror 重写，保证网页读图片尺寸那步能过
+    if(typeof HTMLImageElement!=='undefined'){
+      HTMLImageElement.prototype.decode=function(){
+        var img=this;
+        return new Promise(function(res,rej){
+          try{
+            if(img.complete && img.naturalWidth>0){res();return;}
+            img.onload=function(){res();};
+            img.onerror=function(e){rej(new Error('img load failed'));};
+            if(img.src && !img.complete){/* 等待 onload */}
+          }catch(e){rej(e);}
+        });
+      };
+    }
   }catch(e){}
   try{
     var s=document.createElement('style');
