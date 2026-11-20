@@ -26,11 +26,37 @@
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
 
-  // 图片文件重建：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
-  // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断，导致图片传不上去）。
-  // 这里把图片读成字节后重建成纯内存 File，脱离 content:// 来源。
+  // 图片处理：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
+  // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断）。
+  // 方案：把图片读成字节→内存 File，同时生成 data URL；让 createObjectURL
+  // 对重建的图片直接返回 data URL（<img> 能可靠加载）。
+  // 用 DataTransfer 设置 files（不用 defineProperty，避免把 input.files 固化导致串图）。
   try{
     var imgDone = new WeakSet();
+    var imgDataUrls = new WeakMap();
+    // hook createObjectURL：重建过的图片返回 data URL
+    try{
+      var prevCreate = URL.createObjectURL;
+      URL.createObjectURL = function(obj){
+        try{
+          var du = imgDataUrls.get(obj);
+          if(du) return du;
+        }catch(e){}
+        return prevCreate.apply(this, arguments);
+      };
+    }catch(e){}
+
+    function setInputFiles(el, nf){
+      try{
+        var dt = new DataTransfer();
+        dt.items.add(nf);
+        el.files = dt.files;
+        return true;
+      }catch(e){
+        try{ Object.defineProperty(el,'files',{value:[nf],configurable:true}); return true; }catch(e2){ return false; }
+      }
+    }
+
     document.addEventListener('change', function(e){
       try{
         var el = e.target;
@@ -50,9 +76,16 @@
             var bytes = new Uint8Array(fr.result);
             var nf = new File([bytes], f.name||'image.jpg', {type:f.type, lastModified:f.lastModified});
             imgDone.add(nf);
-            Object.defineProperty(el, 'files', {value:[nf], configurable:true});
-            log('rebuild done size='+nf.size);
-            el.dispatchEvent(new Event('change', {bubbles:true}));
+            // 并行生成 data URL，完成后再放行 change 事件
+            var fr2 = new FileReader();
+            var fire = function(){
+              setInputFiles(el, nf);
+              log('rebuild done size='+nf.size+' dataUrl='+(imgDataUrls.get(nf)?'yes':'no'));
+              el.dispatchEvent(new Event('change', {bubbles:true}));
+            };
+            fr2.onload = function(){ try{ imgDataUrls.set(nf, fr2.result); }catch(e){} fire(); };
+            fr2.onerror = fire;
+            fr2.readAsDataURL(nf);
           }catch(err){ log('rebuild err '+err.message); }
         };
         fr.onerror = function(){ log('rebuild read err'); };
@@ -100,7 +133,8 @@
       url = typeof input==='string' ? input : (input && input.url) || '';
     }
     var isFiles = url.indexOf('/anthropic/v1/files')>=0 || url.indexOf('/files')>=0;
-    if(isFiles){
+    var isAsr = url.indexOf('/tools/asr')>=0 || url.indexOf('/asr')>=0;
+    if(isFiles || isAsr){
       try{
         var body = opt.body || (req && req.formData ? null : null);
         var method = (opt.method || (req && req.method) || 'GET').toUpperCase();
@@ -109,10 +143,17 @@
         if(body && typeof FormData!=='undefined' && (body instanceof FormData || (body.get && body.append))){
           var headers = opt.headers || (req && req.headers) || {};
           var apiKey = '';
-          try{
-            if(headers.get) apiKey = headers.get('x-api-key') || '';
-            else { for(var k in headers){ if(String(k).toLowerCase()==='x-api-key'){ apiKey=headers[k]; break; } } }
-          }catch(e){}
+          var hval = function(name){
+            try{
+              if(headers.get) return headers.get(name) || '';
+              for(var k in headers){ if(String(k).toLowerCase()===name.toLowerCase()) return headers[k]; }
+            }catch(e){}
+            return '';
+          };
+          apiKey = hval('x-api-key');
+          var auth = hval('Authorization');
+          var authKind = 'apikey';
+          if(!apiKey && auth){ apiKey = String(auth).replace(/^Bearer\s+/i,''); authKind='bearer'; }
           var file = body.get ? body.get('file') : null;
           var purpose = body.get ? body.get('purpose') : null;
           var name = (file && file.name) || 'upload';
@@ -126,7 +167,7 @@
               window.__dsUploadCbs[id]=function(json,ok){
                 try{resolve(wrapResponse(json,ok!==false,ok===false?400:200));}catch(e){reject(e);}
               };
-              try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||''); }
+              try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||'',authKind,isAsr?'asr':'files'); }
               catch(e){ reject(e); }
             });
           }).catch(function(e){ log('A ERR '+e.message); throw e; });
@@ -136,7 +177,11 @@
           try{
             return req.clone().formData().then(function(fd){
               var headers = req.headers || {};
-              var apiKey = headers.get ? headers.get('x-api-key') || '' : '';
+              var hv = function(n){ try{return headers.get?headers.get(n)||'':'';}catch(e){return '';} };
+              var apiKey = hv('x-api-key');
+              var auth = hv('Authorization');
+              var authKind = 'apikey';
+              if(!apiKey && auth){ apiKey = String(auth).replace(/^Bearer\s+/i,''); authKind='bearer'; }
               var file = fd.get('file');
               var purpose = fd.get('purpose');
               var name = (file && file.name) || 'upload';
@@ -149,7 +194,7 @@
                   window.__dsUploadCbs[id]=function(json,ok){
                     try{resolve(wrapResponse(json,ok!==false,ok===false?400:200));}catch(e){reject(e);}
                   };
-                  try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||''); }
+                  try{ window.DSNative.uploadFile(id,apiKey,b64,name,type,purpose||'',authKind,isAsr?'asr':'files'); }
                   catch(e){ reject(e); }
                 });
               });
