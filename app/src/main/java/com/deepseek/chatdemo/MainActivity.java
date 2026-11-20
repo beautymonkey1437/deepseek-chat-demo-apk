@@ -99,14 +99,23 @@ public class MainActivity extends Activity {
                     try{
                       var bytes=new Uint8Array(fr.result);
                       var nf=new File([bytes],f.name,{type:f.type||'application/zip'});
+                      // 关键：华为 WebView 对 file:// File 的大偏移 slice() 有 bug，
+                      // zip 库读文件尾部目录区时会拿到错误字节。用 JS 数组切片覆盖
+                      // 实例 slice()，任何偏移都绝对正确。
+                      try{
+                        nf.slice=function(s,e,ct){
+                          var a=s||0, b=(e===undefined||e<0)?bytes.length:Math.min(e,bytes.length);
+                          if(a<0)a=bytes.length+a;
+                          var part=bytes.subarray(a,b);
+                          return new Blob([part],{type:ct||''});
+                        };
+                      }catch(err){rep('SLICE_PATCH ERR '+err.message);}
                       rebuilt.add(nf);
                       Object.defineProperty(el,'files',{value:[nf],configurable:true});
-                      // 前4字节应等于 PK 03 04；并验证 slice().arrayBuffer() 是否可用
                       var head=Array.from(bytes.slice(0,4));
-                      rep('REBUILD done size='+nf.size+' slice4='+nf.slice(0,4).size+' head='+head.join(','));
-                      nf.slice(0,4).arrayBuffer().then(function(ab){
-                        rep('SLICE_AB len='+ab.byteLength+' bytes='+Array.from(new Uint8Array(ab)).join(','));
-                      }).catch(function(err){rep('SLICE_AB ERR '+err.message);});
+                      // 验证尾部大偏移 slice 的长度（zip 读 EOCD 用）
+                      var tail=nf.slice(bytes.length-65557,bytes.length);
+                      rep('REBUILD done size='+nf.size+' head='+head.join(',')+' tailLen='+tail.size);
                       el.dispatchEvent(new Event('change',{bubbles:true}));
                     }catch(err){rep('REBUILD ERR '+err.message);}
                   };
