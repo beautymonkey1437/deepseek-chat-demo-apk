@@ -79,6 +79,18 @@ public class MainActivity extends Activity {
               if(window.__dsFileMon)return;
               window.__dsFileMon=true;
               function rep(s){if(window.DSReport)window.DSReport.report(s);}
+              // 抓网页吞掉的真实错误码：BackupError 构造时执行 this.key=e，
+              // 在 Error.prototype 上装 key 的 setter 即可截获。
+              try{
+                Object.defineProperty(Error.prototype,'key',{
+                  configurable:true,
+                  set:function(v){
+                    rep('BACKUP_ERR '+v);
+                    Object.defineProperty(this,'key',{value:v,writable:true,configurable:true,enumerable:true});
+                  },
+                  get:function(){return this.__k;}
+                });
+              }catch(err){rep('ERRHOOK FAIL '+err.message);}
               var rebuilt=new WeakSet();
               document.addEventListener('change',function(e){
                 try{
