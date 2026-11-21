@@ -1,5 +1,6 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffffff"><title>API 使用 demo</title><meta content="0.1.3" name="application-version"><script>
 (function(){
+  // 旧 WebView 兼容：ES2022/2023 新方法 polyfill
   try{
     if(!Array.prototype.toSorted)Array.prototype.toSorted=function(c){return this.slice().sort(c);};
     if(!Array.prototype.toReversed)Array.prototype.toReversed=function(){return this.slice().reverse();};
@@ -12,17 +13,13 @@
     if(!Object.groupBy)Object.groupBy=function(a,f){var o=Object.create(null);a.forEach(function(x){var k=f(x);(o[k]||(o[k]=[])).push(x);});return o;};
     if(typeof CSS==='undefined')window.CSS={};
     if(!CSS.escape)CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
-    // 老 WebView 的 HTMLImageElement.decode() 对 blob/data URL 会永久 pending，
-    // 直接立即 resolve，绝不让读图片尺寸那步卡死。
+    // 老 WebView 的 HTMLImageElement.decode() 会永久 pending，
+    // 导致读取图片尺寸（含续聊时的历史附件检查）卡住。改为立即 resolve。
     if(typeof HTMLImageElement!=='undefined'){
-      HTMLImageElement.prototype.decode=function(){
-        try{
-          if(window.DSNative && window.DSNative.toast) window.DSNative.toast('decode调用 complete='+this.complete+' w='+this.naturalWidth);
-        }catch(e){}
-        return Promise.resolve();
-      };
+      HTMLImageElement.prototype.decode=function(){ return Promise.resolve(); };
     }
   }catch(e){}
+  // dvh -> vh：旧 WebView 不认 dvh，主框架高度塌成 0 导致白屏
   try{
     var s=document.createElement('style');
     s.textContent=':root{--app-viewport-height:100vh!important;--app-viewport-top:0px!important}html,body{height:100%!important;margin:0!important}#root{height:100vh!important;min-height:100vh!important}#root>div{height:100vh!important;min-height:100vh!important}[class*=frame-]{height:100vh!important}';
@@ -35,124 +32,6 @@
   if(window.__dsUploadBridge) return;
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
-  function toast(s){ try{ if(window.DSNative && window.DSNative.toast) window.DSNative.toast(s); }catch(e){} }
-  // 终极诊断：hook FormData.append，上传必经此步
-  try{
-    if(typeof FormData!=='undefined' && FormData.prototype.append){
-      var origAppend=FormData.prototype.append;
-      FormData.prototype.append=function(name,value){
-        try{
-          var desc = (value && value.name) ? value.name+'('+(value.size||0)+')' : (typeof value==='string'?value.slice(0,20):typeof value);
-          if(window.DSNative && window.DSNative.toast) window.DSNative.toast('FormData.append '+name+'='+desc);
-        }catch(e){}
-        return origAppend.apply(this,arguments);
-      };
-    }
-  }catch(e){}
-
-  // 全局错误捕获：把网页抛的异常用 Toast 显示，定位图片/上传失败真因
-  try{
-    window.addEventListener('error', function(ev){
-      try{
-        var m = ev.message || 'error';
-        var f = (ev.filename||'').split('/').pop();
-        toast('JS错误: '+String(m).slice(0,90)+' @'+f+':'+ev.lineno);
-      }catch(e){}
-    });
-    window.addEventListener('unhandledrejection', function(ev){
-      try{
-        var r = ev.reason;
-        var m = r && (r.message || r.stack) || String(r);
-        toast('Promise错误: '+String(m).slice(0,110));
-      }catch(e){}
-    });
-  }catch(e){}
-
-  // 图片处理重建逻辑。__dsNoRebuild=true 时禁用（让图片走原始路径做对照测试）。
-  window.__dsNoRebuild = true;
-  try{
-    var imgDone = new WeakSet();
-    var imgDataUrls = new WeakMap();
-    // hook createObjectURL：诊断 + 重建过的图片返回 data URL
-    try{
-      var prevCreate = URL.createObjectURL;
-      URL.createObjectURL = function(obj){
-        try{
-          if(window.DSNative && window.DSNative.toast){
-            window.DSNative.toast('createObjectURL type='+(obj&&obj.type||'?')+' size='+(obj&&obj.size||0));
-          }
-          try{
-            var st=new Error().stack||'';
-            var lines=st.split('\n').slice(2,4).map(function(x){return x.trim().replace(/https?:\/\/[^/]+/g,'').replace(/.*main\./,'m.')}).join(' ');
-            if(window.DSNative && window.DSNative.toast) window.DSNative.toast('调用源 '+lines.slice(0,80));
-          }catch(e){}
-        }catch(e){}
-        try{
-          var du = imgDataUrls.get(obj);
-          if(du) return du;
-        }catch(e){}
-        return prevCreate.apply(this, arguments);
-      };
-      // 网页 finally 里会对上面的 data URL 调 revokeObjectURL，
-      // 老 WebView 可能抛错；非 blob: 的 URL 直接忽略
-      var prevRevoke = URL.revokeObjectURL;
-      URL.revokeObjectURL = function(u){
-        if(typeof u==='string' && u.indexOf('blob:')!==0) return;
-        return prevRevoke.apply(this, arguments);
-      };
-    }catch(e){}
-
-    function setInputFiles(el, nf){
-      try{
-        var dt = new DataTransfer();
-        dt.items.add(nf);
-        el.files = dt.files;
-        return true;
-      }catch(e){
-        try{ Object.defineProperty(el,'files',{value:[nf],configurable:true}); return true; }catch(e2){ return false; }
-      }
-    }
-
-    document.addEventListener('change', function(e){
-      try{
-        // 诊断开关：临时禁用图片重建，让图片走原始路径（和文档一样）
-        if(window.__dsNoRebuild) return;
-        var el = e.target;
-        if(!el || el.tagName!=='INPUT' || el.type!=='file') return;
-        var files = el.files;
-        if(!files || !files.length) return;
-        var f = files[0];
-        if(!f.type || f.type.indexOf('image/')!==0) return;   // 只处理图片
-        if(imgDone.has(f)) return;
-        imgDone.add(f);
-        e.stopPropagation();
-        e.preventDefault();
-        log('rebuild image '+(f.name||'')+' '+f.size);
-        toast('图片重建开始 size='+f.size);
-        var fr = new FileReader();
-        fr.onload = function(){
-          try{
-            var bytes = new Uint8Array(fr.result);
-            var nf = new File([bytes], f.name||'image.jpg', {type:f.type, lastModified:f.lastModified});
-            imgDone.add(nf);
-            // 并行生成 data URL，完成后再放行 change 事件
-            var fr2 = new FileReader();
-            var fire = function(){
-              setInputFiles(el, nf);
-              log('rebuild done size='+nf.size+' dataUrl='+(imgDataUrls.get(nf)?'yes':'no'));
-              toast('图片重建完成 size='+nf.size+' dataUrl='+(imgDataUrls.get(nf)?'yes':'no'));
-              el.dispatchEvent(new Event('change', {bubbles:true}));
-            };
-            fr2.onload = function(){ try{ imgDataUrls.set(nf, fr2.result); }catch(e){} fire(); };
-            fr2.onerror = fire;
-            fr2.readAsDataURL(nf);
-          }catch(err){ log('rebuild err '+err.message); }
-        };
-        fr.onerror = function(){ log('rebuild read err'); };
-        fr.readAsArrayBuffer(f);
-      }catch(err){}
-    }, true);
-  }catch(e){}
 
   var nativeFetch = window.fetch;
   if(!nativeFetch) return;
@@ -183,34 +62,24 @@
     };
   }
 
+  // 老 WebView 的 fetch 上传 FormData 有兼容问题：
+  // 把发往 /files 和 /asr 的 multipart 上传交给 Android 原生 HttpURLConnection。
   window.fetch = function(input, init){
-    // 兼容 Request 对象 和 (url, init) 两种调用形式
     var url = '', opt = init || {}, req = null;
     if(input && typeof input==='object' && input.url){
       url = input.url; req = input;
-      // Request.body 是 ReadableStream，无法直接读；用 init 覆盖或克隆
     } else {
       url = typeof input==='string' ? input : (input && input.url) || '';
     }
     var isFiles = url.indexOf('/anthropic/v1/files')>=0 || url.indexOf('/files')>=0;
     var isAsr = url.indexOf('/tools/asr')>=0 || url.indexOf('/asr')>=0;
-    // 诊断：所有发往 api.deepseek.com 的请求都弹 URL
-    try{
-      var methodAll=(opt.method||(req&&req.method)||'GET').toUpperCase();
-      if(url.indexOf('api.deepseek.com')>=0 && methodAll==='POST'){
-        toast('POST请求 '+url.replace('https://api.deepseek.com','')+' body='+!!opt.body);
-      }
-    }catch(e){}
     if(isFiles || isAsr){
       try{
-        var body = opt.body || (req && req.formData ? null : null);
+        var body = opt.body || null;
         var method = (opt.method || (req && req.method) || 'GET').toUpperCase();
-        log('FILES req url='+url+' method='+method+' hasInitBody='+!!opt.body+' hasDSNative='+!!(window.DSNative&&window.DSNative.uploadFile));
-        toast('拦截到请求 '+(isAsr?'ASR':'文件')+' body='+!!opt.body);
-        // 情况A：(url,{body:FormData})
+        // 情况A：(url, {body: FormData})
         if(body && typeof FormData!=='undefined' && (body instanceof FormData || (body.get && body.append))){
           var headers = opt.headers || (req && req.headers) || {};
-          var apiKey = '';
           var hval = function(name){
             try{
               if(headers.get) return headers.get(name) || '';
@@ -218,7 +87,7 @@
             }catch(e){}
             return '';
           };
-          apiKey = hval('x-api-key');
+          var apiKey = hval('x-api-key');
           var auth = hval('Authorization');
           var authKind = 'apikey';
           if(!apiKey && auth){ apiKey = String(auth).replace(/^Bearer\s+/i,''); authKind='bearer'; }
@@ -226,8 +95,7 @@
           var purpose = body.get ? body.get('purpose') : null;
           var name = (file && file.name) || 'upload';
           var type = (file && file.type) || 'application/octet-stream';
-          var size = (file && file.size) || 0;
-          log('A file='+name+' size='+size+' key='+(apiKey?apiKey.slice(0,6):'none'));
+          if(!file) return nativeFetch.apply(this, arguments);
           return toB64(file).then(function(b64){
             return new Promise(function(resolve,reject){
               var id='up_'+Date.now()+'_'+Math.random().toString(36).slice(2);
@@ -240,8 +108,8 @@
             });
           }).catch(function(e){ log('A ERR '+e.message); throw e; });
         }
-        // 情况B：Request 对象携带 body —— 异步取 formData
-        if(req && req.clone && true){
+        // 情况B：Request 对象携带 FormData
+        if(req && req.clone){
           try{
             return req.clone().formData().then(function(fd){
               var headers = req.headers || {};
@@ -252,9 +120,9 @@
               if(!apiKey && auth){ apiKey = String(auth).replace(/^Bearer\s+/i,''); authKind='bearer'; }
               var file = fd.get('file');
               var purpose = fd.get('purpose');
+              if(!file) return nativeFetch.apply(window,arguments);
               var name = (file && file.name) || 'upload';
               var type = (file && file.type) || 'application/octet-stream';
-              log('B file='+name+' size='+(file&&file.size||0));
               return toB64(file).then(function(b64){
                 return new Promise(function(resolve,reject){
                   var id='up_'+Date.now()+'_'+Math.random().toString(36).slice(2);
@@ -266,7 +134,7 @@
                   catch(e){ reject(e); }
                 });
               });
-            }).catch(function(e){ log('B ERR '+e.message); return nativeFetch.apply(window,arguments); });
+            }).catch(function(e){ return nativeFetch.apply(window,arguments); });
           }catch(e){}
         }
       }catch(e){ log('detect ERR '+e.message); }
@@ -283,6 +151,5 @@
   };
   log('bridge installed');
 })();
-
 </script>
 <script defer src="static/js/main.4fc5bb07.js"></script><link href="static/css/main.27198ffe.css" rel="stylesheet"></head><body><div id="root"></div></body></html>
