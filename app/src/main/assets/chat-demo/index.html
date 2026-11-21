@@ -75,6 +75,12 @@
     var isAsr = url.indexOf('/tools/asr')>=0 || url.indexOf('/asr')>=0;
     if(isFiles || isAsr){
       try{
+        var body0 = opt.body || null;
+        var f0 = body0 && body0.get ? body0.get('file') : null;
+        if(window.DSNative && window.DSNative.toast)
+          window.DSNative.toast('拦到上传 '+(isAsr?'ASR':'files')+' file='+(f0?(f0.name||'?')+'/'+(f0.size||0):'无'));
+      }catch(e){}
+      try{
         var body = opt.body || null;
         var method = (opt.method || (req && req.method) || 'GET').toUpperCase();
         // 情况A：(url, {body: FormData})
