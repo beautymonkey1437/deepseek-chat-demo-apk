@@ -79,8 +79,13 @@
       URL.createObjectURL = function(obj){
         try{
           if(window.DSNative && window.DSNative.toast){
-            window.DSNative.toast('createObjectURL 调用 type='+(obj&&obj.type||'?')+' size='+(obj&&obj.size||0));
+            window.DSNative.toast('createObjectURL type='+(obj&&obj.type||'?')+' size='+(obj&&obj.size||0));
           }
+          try{
+            var st=new Error().stack||'';
+            var lines=st.split('\n').slice(2,4).map(function(x){return x.trim().replace(/https?:\/\/[^/]+/g,'').replace(/.*main\./,'m.')}).join(' ');
+            if(window.DSNative && window.DSNative.toast) window.DSNative.toast('调用源 '+lines.slice(0,80));
+          }catch(e){}
         }catch(e){}
         try{
           var du = imgDataUrls.get(obj);
