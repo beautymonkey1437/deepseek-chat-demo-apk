@@ -139,7 +139,6 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(DOWNLOAD_HOOK, null);
-                toastOnUi("V4-HTTP版 已加载");
             }
         });
 
@@ -166,7 +165,6 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
-                toastOnUi("[V4]文件选择触发");
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
                 // 直接用通用 */* 选择器，不依赖 params.createIntent() 的
@@ -198,10 +196,9 @@ public class MainActivity extends Activity {
         try {
             localServer = new LocalServer(LOCAL_PORT);
             localServer.start();
-            toastOnUi("V4 本地HTTP服务OK 8899");
         } catch (Exception e) {
             Log.e(TAG, "local server start failed", e);
-            toastOnUi("V4 本地服务启动失败 " + e.getMessage());
+            toastOnUi("本地服务启动失败");
         }
         webView.loadUrl(SITE_URL);
     }
@@ -213,7 +210,6 @@ public class MainActivity extends Activity {
             if (filePathCallback == null) return;
             final ValueCallback<Uri[]> cb = filePathCallback;
             filePathCallback = null;
-            toastOnUi("[V4]文件选择返回 code=" + resultCode + " data=" + (data != null));
             if (resultCode != RESULT_OK || data == null) {
                 cb.onReceiveValue(null);
                 return;
@@ -235,8 +231,6 @@ public class MainActivity extends Activity {
                 boolean ok = true;
                 for (Uri u : finalPicked) {
                     File cached = copyToCache(u);
-                    final File fCached = cached;
-                    runOnUiThread(() -> toastOnUi("缓存文件 " + (fCached==null?"失败":fCached.getName()+" "+fCached.length()+"字节")));
                     if (cached != null) {
                         Uri contentUri = androidx.core.content.FileProvider.getUriForFile(
                                 MainActivity.this, getPackageName() + ".fileprovider", cached);
@@ -247,7 +241,6 @@ public class MainActivity extends Activity {
                 final Uri[] result = ok ? out.toArray(new Uri[0]) : null;
                 runOnUiThread(() -> {
                     if (result == null) toastOnUi("读取文件失败，请重试");
-                    else toastOnUi("交给网页 " + result.length + " 个URI");
                     cb.onReceiveValue(result);
                 });
             }).start();
@@ -262,15 +255,9 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void toast(String msg) {
-            toastOnUi("[桥]" + msg);
-        }
-
-        @JavascriptInterface
         public void uploadFile(String id, String apiKey, String base64,
                                String fileName, String mime, String purpose,
                                String authKind, String uploadKind) {
-            toastOnUi("[桥]拦截上传 " + uploadKind + " " + fileName + " " + (base64==null?0:base64.length()) + "字符");
             new Thread(() -> doUpload(id, apiKey, base64, fileName, mime, purpose, authKind, uploadKind), "ds-upload").start();
         }
     }
@@ -327,14 +314,10 @@ public class MainActivity extends Activity {
             ok = (code >= 200 && code < 300);
             resultJson = resp == null || resp.isEmpty() ? "{}" : resp;
             Log.d(TAG, "upload code=" + code + " resp=" + resultJson.substring(0, Math.min(200, resultJson.length())));
-            final boolean uOk = ok;
-            final String uResp = resultJson;
-            runOnUiThread(() -> toastOnUi("[桥]上传返回 " + (uOk?"成功":"失败") + " " + uResp.substring(0, Math.min(80,uResp.length()))));
         } catch (Exception e) {
             Log.e(TAG, "upload failed", e);
             ok = false;
             resultJson = "{\"error\":{\"message\":\"" + escapeJson(e.getMessage() == null ? "upload failed" : e.getMessage()) + "\"}}";
-            runOnUiThread(() -> toastOnUi("[桥]上传异常 " + String.valueOf(e.getMessage()).substring(0, Math.min(80, String.valueOf(e.getMessage()).length()))));
         }
         final boolean fOk = ok;
         final String fJson = resultJson;
