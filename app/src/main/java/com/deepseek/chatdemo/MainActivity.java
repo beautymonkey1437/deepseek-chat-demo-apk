@@ -314,10 +314,16 @@ public class MainActivity extends Activity {
             ok = (code >= 200 && code < 300);
             resultJson = resp == null || resp.isEmpty() ? "{}" : resp;
             Log.d(TAG, "upload code=" + code + " resp=" + resultJson.substring(0, Math.min(200, resultJson.length())));
+            if (!ok) {
+                final String brief = "上传失败 code=" + code + " " + resultJson.substring(0, Math.min(120, resultJson.length()));
+                runOnUiThread(() -> toastOnUi(brief));
+            }
         } catch (Exception e) {
             Log.e(TAG, "upload failed", e);
             ok = false;
             resultJson = "{\"error\":{\"message\":\"" + escapeJson(e.getMessage() == null ? "upload failed" : e.getMessage()) + "\"}}";
+            final String brief = "上传异常 " + String.valueOf(e.getMessage()).substring(0, Math.min(100, String.valueOf(e.getMessage()).length()));
+            runOnUiThread(() -> toastOnUi(brief));
         }
         final boolean fOk = ok;
         final String fJson = resultJson;
