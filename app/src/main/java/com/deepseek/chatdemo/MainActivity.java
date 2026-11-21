@@ -235,6 +235,8 @@ public class MainActivity extends Activity {
                 boolean ok = true;
                 for (Uri u : finalPicked) {
                     File cached = copyToCache(u);
+                    final File fCached = cached;
+                    runOnUiThread(() -> toastOnUi("缓存文件 " + (fCached==null?"失败":fCached.getName()+" "+fCached.length()+"字节")));
                     if (cached != null) {
                         Uri contentUri = androidx.core.content.FileProvider.getUriForFile(
                                 MainActivity.this, getPackageName() + ".fileprovider", cached);
@@ -245,6 +247,7 @@ public class MainActivity extends Activity {
                 final Uri[] result = ok ? out.toArray(new Uri[0]) : null;
                 runOnUiThread(() -> {
                     if (result == null) toastOnUi("读取文件失败，请重试");
+                    else toastOnUi("交给网页 " + result.length + " 个URI");
                     cb.onReceiveValue(result);
                 });
             }).start();
