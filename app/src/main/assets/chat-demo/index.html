@@ -54,11 +54,8 @@
     });
   }catch(e){}
 
-  // 图片处理：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
-  // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断）。
-  // 方案：把图片读成字节→内存 File，同时生成 data URL；让 createObjectURL
-  // 对重建的图片直接返回 data URL（<img> 能可靠加载）。
-  // 用 DataTransfer 设置 files（不用 defineProperty，避免把 input.files 固化导致串图）。
+  // 图片处理重建逻辑。__dsNoRebuild=true 时禁用（让图片走原始路径做对照测试）。
+  window.__dsNoRebuild = true;
   try{
     var imgDone = new WeakSet();
     var imgDataUrls = new WeakMap();
@@ -94,6 +91,8 @@
 
     document.addEventListener('change', function(e){
       try{
+        // 诊断开关：临时禁用图片重建，让图片走原始路径（和文档一样）
+        if(window.__dsNoRebuild) return;
         var el = e.target;
         if(!el || el.tagName!=='INPUT' || el.type!=='file') return;
         var files = el.files;
