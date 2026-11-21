@@ -41,6 +41,23 @@
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
   function toast(s){ try{ if(window.DSNative && window.DSNative.toast) window.DSNative.toast(s); }catch(e){} }
+  // 全局错误捕获：把网页抛的异常用 Toast 显示，定位图片/上传失败真因
+  try{
+    window.addEventListener('error', function(ev){
+      try{
+        var m = ev.message || 'error';
+        var f = (ev.filename||'').split('/').pop();
+        toast('JS错误: '+String(m).slice(0,90)+' @'+f+':'+ev.lineno);
+      }catch(e){}
+    });
+    window.addEventListener('unhandledrejection', function(ev){
+      try{
+        var r = ev.reason;
+        var m = r && (r.message || r.stack) || String(r);
+        toast('Promise错误: '+String(m).slice(0,110));
+      }catch(e){}
+    });
+  }catch(e){}
 
   // 图片处理：华为 WebView 对 content:// 转来的 File 用 URL.createObjectURL
   // 后 <img>/canvas 加载会失败（网页读图片尺寸时中断）。
@@ -59,6 +76,13 @@
           if(du) return du;
         }catch(e){}
         return prevCreate.apply(this, arguments);
+      };
+      // 网页 finally 里会对上面的 data URL 调 revokeObjectURL，
+      // 老 WebView 可能抛错；非 blob: 的 URL 直接忽略
+      var prevRevoke = URL.revokeObjectURL;
+      URL.revokeObjectURL = function(u){
+        if(typeof u==='string' && u.indexOf('blob:')!==0) return;
+        return prevRevoke.apply(this, arguments);
       };
     }catch(e){}
 
