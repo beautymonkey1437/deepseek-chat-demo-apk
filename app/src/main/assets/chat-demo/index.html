@@ -36,6 +36,20 @@
   window.__dsUploadBridge = true;
   function log(s){ try{ if(window.DSNative && window.DSNative.log) window.DSNative.log('[upl] '+s); }catch(e){} }
   function toast(s){ try{ if(window.DSNative && window.DSNative.toast) window.DSNative.toast(s); }catch(e){} }
+  // 终极诊断：hook FormData.append，上传必经此步
+  try{
+    if(typeof FormData!=='undefined' && FormData.prototype.append){
+      var origAppend=FormData.prototype.append;
+      FormData.prototype.append=function(name,value){
+        try{
+          var desc = (value && value.name) ? value.name+'('+(value.size||0)+')' : (typeof value==='string'?value.slice(0,20):typeof value);
+          if(window.DSNative && window.DSNative.toast) window.DSNative.toast('FormData.append '+name+'='+desc);
+        }catch(e){}
+        return origAppend.apply(this,arguments);
+      };
+    }
+  }catch(e){}
+
   // 全局错误捕获：把网页抛的异常用 Toast 显示，定位图片/上传失败真因
   try{
     window.addEventListener('error', function(ev){
