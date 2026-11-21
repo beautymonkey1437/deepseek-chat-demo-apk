@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 版本号直接取仓库根的 package.json，APK 与网页永远同一个版本
+def appVersion = new groovy.json.JsonSlurper().parseText(file('../../package.json').text).version
+def versionParts = appVersion.tokenize('.').collect { part ->
+    def digits = part.find(/\d+/)
+    digits ? digits.toInteger() : 0
+}
+// 0.1.3 -> 103，供系统比较新旧版本
+def appVersionCode = (versionParts + [0, 0, 0]).take(3).inject(0) { acc, part -> acc * 100 + part }
+
+android {
+    namespace 'com.deepseek.chatdemo'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.deepseek.chatdemo'
+        minSdk 23
+        // 停留在 33：targetSdk 35 会启用 predictive back，导致 WebView 内返回键失效
+        targetSdk 33
+        versionCode appVersionCode
+        versionName appVersion
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+}

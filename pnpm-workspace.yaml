@@ -1,0 +1,4 @@
+# Windows 上 pnpm 默认的符号链接 node_modules 可能无法被 Node 解析，
+# 导致 `pnpm dev` 找不到 @rspack/dev-server、`pnpm type` 找不到 tsc 的平台包。
+# 改用扁平安装（与 C:\ 同盘 / NTFS 之外的盘符、受限环境更稳）。
+nodeLinker: hoisted

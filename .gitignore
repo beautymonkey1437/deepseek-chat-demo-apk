@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+.pnpm-store/
+.cache/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+tmp/
+
+# 临时素材（对照上游、参考工程用的下载目录）
+.tmp-*/
+
+# APK 打包产物与生成资源（pnpm apk:assets 会重新生成）
+apk/app/src/main/assets/chat-demo/
+apk/.gradle/
+apk/build/
+apk/app/build/
+apk/local.properties
+apk/.kotlin/
