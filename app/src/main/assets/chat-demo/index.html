@@ -12,23 +12,14 @@
     if(!Object.groupBy)Object.groupBy=function(a,f){var o=Object.create(null);a.forEach(function(x){var k=f(x);(o[k]||(o[k]=[])).push(x);});return o;};
     if(typeof CSS==='undefined')window.CSS={};
     if(!CSS.escape)CSS.escape=function(s){return String(s).replace(/([^a-zA-Z0-9_-])/g,'\\$1');};
-    // 老 WebView 的 HTMLImageElement.decode() 对 blob/data URL 会卡住/失败，
-    // 用可靠实现重写：onload/onerror + 超时兜底，绝不让 Promise 永久 pending。
+    // 老 WebView 的 HTMLImageElement.decode() 对 blob/data URL 会永久 pending，
+    // 直接立即 resolve，绝不让读图片尺寸那步卡死。
     if(typeof HTMLImageElement!=='undefined'){
       HTMLImageElement.prototype.decode=function(){
-        var img=this;
-        return new Promise(function(res,rej){
-          var done=false;
-          var ok=function(){if(done)return;done=true;res();};
-          var fail=function(){if(done)return;done=true;res();}; // 失败也 resolve，避免卡死
-          try{
-            if(img.complete && img.naturalWidth>0){ok();return;}
-            img.onload=ok;
-            img.onerror=fail;
-            // 兜底：图片可能已加载完但事件丢失
-            setTimeout(function(){ if(img.complete && img.naturalWidth>0) ok(); else ok(); }, 1200);
-          }catch(e){ ok(); }
-        });
+        try{
+          if(window.DSNative && window.DSNative.toast) window.DSNative.toast('decode调用 complete='+this.complete+' w='+this.naturalWidth);
+        }catch(e){}
+        return Promise.resolve();
       };
     }
   }catch(e){}
