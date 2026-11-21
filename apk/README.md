@@ -37,6 +37,13 @@ pnpm apk
 
 APK 用 debug 签名，能直接侧载；要上商店再换成自己的 release 签名。
 
+出包结果会放在两处，手机都能直接下：
+
+- **Release**：`Actions` 里点 `Run workflow` 只会留下 artifact；要一条直链就在打 tag 后由工作流自动建 Release，
+  或者手动 `gh release create apk-0.1.3 apk/app/build/outputs/apk/debug/chat-demo-0.1.3-debug.apk`
+- **网页版**：仓库同时带着 `pages.yml`，开启 Pages（Settings → Pages → Source: GitHub Actions）后
+  每次推 main 都会发布到 `https://<用户名>.github.io/<仓库名>/`，手机浏览器也能直接用
+
 ## 在手机上用什么接口
 
 App 内置的是本仓库的版本，设置 → 数据管理里可以自己填：
