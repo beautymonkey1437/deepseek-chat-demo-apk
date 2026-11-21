@@ -6,8 +6,11 @@
 
 - **内置官方 chat-demo v0.1.3**（MIT 协议，源码在 `github.com/deepseek-ai/chat-demo`），页面文件在 `app/src/main/assets/chat-demo/`，不再依赖 `cdn.deepseek.com`。
 - **关闭内容外审**：把源码里的 `safety_check` 从 `high` 改为 `low`（API 默认审核），对话风格更贴近原始体验。
+- **本地 HTTP 服务提供页面**：页面由 App 内置的小型 HTTP 服务（`127.0.0.1:8899`）提供，而非 `file://`——后者在老 WebView 上被视为不安全上下文，会导致麦克风、文件选择等能力失效。
 - **兼容老 WebView**：页面里内置了 `toSorted`/`at`/`Object.hasOwn` 等新方法的 polyfill 和 `dvh`→`vh` 修复，解决华为等老机型白屏、导入失败问题。
 - **附件上传走原生**：老 WebView 的 `fetch`+`FormData` 上传有 bug，改为把文件通过 JS 桥交给 Android 用原生 `HttpURLConnection` 上传，绕开内核问题。
+- **图片上传修复**：官方源码在上传图片时会对图片做尺寸检测/resize（`await new Image().decode()`），老 WebView 上这步会永久卡住，导致图片一直"上传中"、无法发送。已直接 patch 内联 JS（`main.*.js`），让图片跳过 resize、和文档走同样的直接上传路径。AI 可正常识别图片内容。
+- **麦克风**：补了 `RECORD_AUDIO` 权限申请和 WebView `onPermissionRequest` 授权（语音识别 ASR 仍受老 WebView 限制，可能不可用）。
 - **导入 ZIP**：接上系统文件选择器 + FileProvider，选文件稳定。
 - **导出 ZIP**：拦截网页的 `blob:` 下载，分片写进手机「下载」目录（大文件也不会失败）。
 - 打开 `localStorage` + `IndexedDB`，网页设置、API Key、会话、图片都能存进 App 私有目录。
