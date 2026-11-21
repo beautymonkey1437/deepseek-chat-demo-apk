@@ -175,6 +175,13 @@
     }
     var isFiles = url.indexOf('/anthropic/v1/files')>=0 || url.indexOf('/files')>=0;
     var isAsr = url.indexOf('/tools/asr')>=0 || url.indexOf('/asr')>=0;
+    // 诊断：所有发往 api.deepseek.com 的请求都弹 URL
+    try{
+      var methodAll=(opt.method||(req&&req.method)||'GET').toUpperCase();
+      if(url.indexOf('api.deepseek.com')>=0 && methodAll==='POST'){
+        toast('POST请求 '+url.replace('https://api.deepseek.com','')+' body='+!!opt.body);
+      }
+    }catch(e){}
     if(isFiles || isAsr){
       try{
         var body = opt.body || (req && req.formData ? null : null);
