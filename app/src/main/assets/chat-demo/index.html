@@ -59,10 +59,15 @@
   try{
     var imgDone = new WeakSet();
     var imgDataUrls = new WeakMap();
-    // hook createObjectURL：重建过的图片返回 data URL
+    // hook createObjectURL：诊断 + 重建过的图片返回 data URL
     try{
       var prevCreate = URL.createObjectURL;
       URL.createObjectURL = function(obj){
+        try{
+          if(window.DSNative && window.DSNative.toast){
+            window.DSNative.toast('createObjectURL 调用 type='+(obj&&obj.type||'?')+' size='+(obj&&obj.size||0));
+          }
+        }catch(e){}
         try{
           var du = imgDataUrls.get(obj);
           if(du) return du;
